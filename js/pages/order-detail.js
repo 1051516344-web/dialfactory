@@ -482,11 +482,11 @@ const OrderDetailPage = (() => {
     }
 
     ConfirmDialog.show({
-      title: '删除订单',
-      content: `<p style="color:var(--color-danger);">删除后订单及工序记录将<strong>永久移除</strong>。</p>
-                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">仅用于试运行阶段错误数据清理。</p>
-                <p style="font-weight:600;">确认删除 #${escapeHTML(currentOrder.order_no)}？</p>`,
-      confirmLabel: '确认删除',
+      title: '试运行清理',
+      content: `<p style="color:var(--color-danger);">该功能仅用于删除试运行阶段错误录入的数据。</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">真实生产订单请使用取消订单。</p>
+                <p style="font-weight:600;">确认清理 #${escapeHTML(currentOrder.order_no)}？</p>`,
+      confirmLabel: '确认清理',
       dangerous: true,
       onConfirm: async () => {
         const result = await OrdersAPI.deleteOrder(currentOrder.id);
@@ -540,7 +540,7 @@ const OrderDetailPage = (() => {
         // Trial delete button (temporary)
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn btn-danger btn-sm';
-        deleteBtn.textContent = '删除';
+        deleteBtn.textContent = '试运行清理';
         deleteBtn.style.cssText = 'margin-left:4px;font-size:0.8rem;background:#DC2626;';
         deleteBtn.onclick = onDeleteOrder;
         header.appendChild(deleteBtn);
