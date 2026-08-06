@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DialFactory V1</title>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="css/reset.css">
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/flow.css">
+  <link rel="stylesheet" href="css/pages.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Navigation -->
+    <div id="nav-container"></div>
+
+    <!-- Page Content -->
+    <main id="page-container" class="page-content">
+      <div class="skeleton-page">
+        <div class="skeleton-header">
+          <div class="skeleton-line skeleton-line-xl"></div>
+        </div>
+        <div class="skeleton-card">
+          <div class="skeleton-line skeleton-line-lg"></div>
+          <div class="skeleton-line skeleton-line-sm"></div>
+        </div>
+        <div class="skeleton-card">
+          <div class="skeleton-line skeleton-line-lg"></div>
+          <div class="skeleton-line skeleton-line-sm"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- JS Infrastructure (IIFE pattern, order matters) -->
+  <script src="js/config.js"></script>
+  <script src="js/utils/dom.js"></script>
+  <script src="js/utils/format.js"></script>
+  <script src="js/utils/router.js"></script>
+  <script src="js/components/skeleton.js"></script>
+  <script src="js/components/nav-bar.js"></script>
+
+  <!-- App Boot (loads Supabase SDK async, then inits) -->
+  <script type="module">
+    // Dynamic import Supabase SDK from CDN
+    const { createClient } = await import(
+      'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm'
+    );
+
+    // Make available globally
+    window.supabase = { createClient };
+
+    // Chain-load scripts in dependency order
+    const scripts = [
+      'js/data/client.js',
+      'js/data/processes.js',
+      'js/data/orders.js',
+      'js/data/customers.js',
+      'js/data/exceptions.js',
+      'js/domain/order-state.js',
+      'js/domain/node-state.js',
+      'js/domain/validation.js',
+      'js/domain/seq-calc.js',
+      'js/domain/node-actions.js',
+      'js/domain/order-create.js',
+      'js/components/status-badge.js',
+      'js/components/progress-bar.js',
+      'js/components/empty-state.js',
+      'js/components/confirm-dialog.js',
+      'js/components/toast.js',
+      'js/pages/route-list.js',
+      'js/pages/order-list.js',
+      'js/pages/dashboard.js',
+      'js/pages/order-detail.js',
+      'js/pages/order-create.js',
+      'js/pages/exception-list.js',
+      'js/app.js'
+    ];
+
+    function loadNext(index) {
+      if (index >= scripts.length) return;
+      const s = document.createElement('script');
+      s.src = scripts[index];
+      s.onload = () => loadNext(index + 1);
+      document.body.appendChild(s);
+    }
+
+    loadNext(0);
+  </script>
+</body>
+</html>
