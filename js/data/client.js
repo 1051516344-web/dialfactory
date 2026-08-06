@@ -7,10 +7,9 @@ const DB = (() => {
 
   function init() {
     if (client) return client;
-    console.log('[DB] window.supabase=', typeof window.supabase, Object.keys(window.supabase || {}));
     const { createClient } = window.supabase;
     if (!createClient) {
-      console.error('[DB] createClient not found in window.supabase');
+      console.error('[DB] Supabase SDK not loaded');
       return null;
     }
     client = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);

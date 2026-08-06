@@ -2,8 +2,6 @@
    DialFactory V1 · Application Entry Point
    ============================================================ */
 
-console.log('[app.js] Script executing');
-
 const App = (() => {
 
   function registerRoutes() {
@@ -84,7 +82,6 @@ const App = (() => {
 })();
 
 // Boot: use DOMContentLoaded if not yet fired, otherwise init immediately
-console.log('[Boot] readyState=' + document.readyState);
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => App.init());
 } else {
