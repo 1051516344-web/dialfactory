@@ -44,18 +44,16 @@
   <script src="js/components/skeleton.js"></script>
   <script src="js/components/nav-bar.js"></script>
 
-  <!-- App Boot (loads Supabase SDK async, then inits) -->
+  <!-- Supabase SDK + App Boot -->
   <script type="module">
-    // Dynamic import Supabase SDK from CDN
-    const { createClient } = await import(
-      'https://esm.sh/@supabase/supabase-js@2'
-    );
+    try {
+      console.log('[Boot] Importing Supabase SDK...');
+      const supabase = await import('https://esm.sh/@supabase/supabase-js@2');
+      window.supabase = supabase;
+      console.log('[Boot] SDK loaded');
 
-    // Make available globally
-    window.supabase = { createClient };
-
-    // Chain-load scripts in dependency order
-    const scripts = [
+      // Chain-load scripts in dependency order
+      const scripts = [
       'js/data/client.js',
       'js/data/processes.js',
       'js/data/orders.js',
@@ -82,14 +80,27 @@
     ];
 
     function loadNext(index) {
-      if (index >= scripts.length) return;
+      if (index >= scripts.length) {
+        console.log('[Boot] All scripts loaded');
+        return;
+      }
       const s = document.createElement('script');
       s.src = scripts[index];
       s.onload = () => loadNext(index + 1);
+      s.onerror = () => {
+        console.error('[Boot] Failed to load:', scripts[index]);
+        document.getElementById('page-container').innerHTML =
+          '<div class="card" style="text-align:center;margin:48px;"><p style="font-size:2rem;">⚠️</p><p style="color:var(--color-danger);">加载失败: ' + scripts[index] + '</p></div>';
+      };
       document.body.appendChild(s);
     }
 
     loadNext(0);
+  } catch (err) {
+    console.error('[Boot] Fatal:', err);
+    document.getElementById('page-container').innerHTML =
+      '<div class="card" style="text-align:center;margin:48px;"><p style="font-size:2rem;">⚠️</p><p style="color:var(--color-danger);">启动失败: ' + err.message + '</p></div>';
+  }
   </script>
 </body>
 </html>
