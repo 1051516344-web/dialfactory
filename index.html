@@ -44,16 +44,32 @@
   <script src="js/components/skeleton.js"></script>
   <script src="js/components/nav-bar.js"></script>
 
-  <!-- Supabase SDK + App Boot -->
-  <script type="module">
-    try {
-      console.log('[Boot] Importing Supabase SDK...');
-      const supabase = await import('https://esm.sh/@supabase/supabase-js@2');
-      window.supabase = supabase;
-      console.log('[Boot] SDK loaded');
+  <!-- Import Map for Supabase SDK -->
+  <script type="importmap">
+  {
+    "imports": {
+      "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
+    }
+  }
+  </script>
 
-      // Chain-load scripts in dependency order
-      const scripts = [
+  <!-- Error display if module fails -->
+  <script>
+    window.addEventListener('error', function(e) {
+      if (e.target.tagName === 'SCRIPT') {
+        document.getElementById('page-container').innerHTML =
+          '<div class="card" style="text-align:center;margin:48px;"><p style="font-size:2rem;">⚠️</p><p style="color:var(--color-danger);">脚本加载失败: ' + (e.target.src || 'unknown') + '</p></div>';
+      }
+    }, true);
+  </script>
+
+  <!-- App Boot -->
+  <script type="module">
+    import { createClient } from '@supabase/supabase-js';
+    window.supabase = { createClient };
+
+    // Chain-load scripts in dependency order
+    const scripts = [
       'js/data/client.js',
       'js/data/processes.js',
       'js/data/orders.js',
@@ -96,11 +112,6 @@
     }
 
     loadNext(0);
-  } catch (err) {
-    console.error('[Boot] Fatal:', err);
-    document.getElementById('page-container').innerHTML =
-      '<div class="card" style="text-align:center;margin:48px;"><p style="font-size:2rem;">⚠️</p><p style="color:var(--color-danger);">启动失败: ' + err.message + '</p></div>';
-  }
   </script>
 </body>
 </html>
