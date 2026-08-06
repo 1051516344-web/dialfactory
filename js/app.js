@@ -2,6 +2,8 @@
    DialFactory V1 · Application Entry Point
    ============================================================ */
 
+console.log('[app.js] Script executing');
+
 const App = (() => {
 
   function registerRoutes() {
