@@ -82,6 +82,7 @@ const App = (() => {
 })();
 
 // Boot: use DOMContentLoaded if not yet fired, otherwise init immediately
+console.log('[Boot] readyState=' + document.readyState);
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => App.init());
 } else {
