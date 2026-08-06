@@ -256,5 +256,40 @@ const OrdersAPI = (() => {
     return { ok: true, data: { order, nodes: r2.data } };
   }
 
-  return { list, getById, getNodeStats, updateStatus, updateNode, insertNode, bumpSeq, createOrder };
+  /**
+   * Delete order manually (trial safety patch).
+   * Follows FK RESTRICT order: exceptions -> nodes -> order.
+   * Safety rules enforced by CALLER (not API layer).
+   */
+  async function deleteOrder(orderId) {
+    const db = DB.get();
+
+    // Step 1: Delete exception_events for this order's nodes
+    const { data: nodes } = await DB.call(
+      db.from('order_nodes').select('id').eq('order_id', orderId)
+    );
+    const nodeIds = (nodes || []).map(n => n.id);
+    if (nodeIds.length > 0) {
+      const r1 = await DB.call(
+        db.from('exception_events').delete().in('node_id', nodeIds)
+      );
+      if (!r1.ok) return { ok: false, error: 'Failed to delete exceptions', phase: 'exceptions' };
+    }
+
+    // Step 2: Delete order_nodes
+    const r2 = await DB.call(
+      db.from('order_nodes').delete().eq('order_id', orderId)
+    );
+    if (!r2.ok) return { ok: false, error: 'Failed to delete nodes', phase: 'nodes' };
+
+    // Step 3: Delete order
+    const r3 = await DB.call(
+      db.from('orders').delete().eq('id', orderId)
+    );
+    if (!r3.ok) return { ok: false, error: 'Failed to delete order', phase: 'order' };
+
+    return { ok: true };
+  }
+
+  return { list, getById, getNodeStats, updateStatus, updateNode, insertNode, bumpSeq, createOrder, deleteOrder };
 })();

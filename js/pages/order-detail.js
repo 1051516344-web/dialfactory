@@ -456,6 +456,50 @@ const OrderDetailPage = (() => {
     });
   }
 
+  // ==========================================================
+  // Trial Delete (temporary safety patch)
+  // ==========================================================
+  async function onDeleteOrder() {
+    // Safety checks
+    if (currentOrder.status === 'completed') {
+      Toast.error('已完成订单不可删除'); return;
+    }
+    const hasExceptions = currentExceptions.length > 0;
+    if (hasExceptions) {
+      Toast.error('订单包含异常记录，不可删除'); return;
+    }
+    const hasCompletedNodes = currentNodeList.some(n => n.status === 'done');
+    if (hasCompletedNodes) {
+      Toast.error('订单包含已完成节点，不可删除'); return;
+    }
+    const hasRework = currentNodeList.some(n => (n.rework_pass || 0) > 0);
+    if (hasRework) {
+      Toast.error('订单包含返工节点，不可删除'); return;
+    }
+    const elapsed = Date.now() - new Date(currentOrder.created_at).getTime();
+    if (elapsed > 24 * 60 * 60 * 1000) {
+      Toast.error('订单创建超过24小时，不可删除'); return;
+    }
+
+    ConfirmDialog.show({
+      title: '删除订单',
+      content: `<p style="color:var(--color-danger);">删除后订单及工序记录将<strong>永久移除</strong>。</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">仅用于试运行阶段错误数据清理。</p>
+                <p style="font-weight:600;">确认删除 #${escapeHTML(currentOrder.order_no)}？</p>`,
+      confirmLabel: '确认删除',
+      dangerous: true,
+      onConfirm: async () => {
+        const result = await OrdersAPI.deleteOrder(currentOrder.id);
+        if (result.ok) {
+          Toast.success('订单已删除');
+          Router.navigate('/orders');
+        } else {
+          Toast.error(result.error || '删除失败');
+        }
+      }
+    });
+  }
+
   async function onSegmentRework(nodeId) {
     const node = getNode(nodeId);
     if (!node) return;
@@ -492,6 +536,14 @@ const OrderDetailPage = (() => {
         cancelBtn.style.cssText = 'margin-left:auto;font-size:0.8rem;';
         cancelBtn.onclick = onCancelOrder;
         header.appendChild(cancelBtn);
+
+        // Trial delete button (temporary)
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm';
+        deleteBtn.textContent = '删除';
+        deleteBtn.style.cssText = 'margin-left:4px;font-size:0.8rem;background:#DC2626;';
+        deleteBtn.onclick = onDeleteOrder;
+        header.appendChild(deleteBtn);
       }
     }
   };
