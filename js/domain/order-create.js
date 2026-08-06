@@ -73,7 +73,7 @@ const OrderCreate = (() => {
   /**
    * Validate order form and confirmed steps.
    */
-  function validateOrderForm(formData, confirmedSteps) {
+  function validateOrderForm(formData, confirmedSteps, { checkSteps = true } = {}) {
     const errors = [];
 
     if (!formData.order_no || !formData.order_no.trim()) {
@@ -93,9 +93,11 @@ const OrderCreate = (() => {
       errors.push('请选择工艺路线');
     }
 
-    const confirmedCount = (confirmedSteps || []).filter(s => s.confirmed).length;
-    if (confirmedCount === 0) {
-      errors.push('至少确认一道工序');
+    if (checkSteps) {
+      const confirmedCount = (confirmedSteps || []).filter(s => s.confirmed).length;
+      if (confirmedCount === 0) {
+        errors.push('至少确认一道工序');
+      }
     }
 
     return { valid: errors.length === 0, errors };

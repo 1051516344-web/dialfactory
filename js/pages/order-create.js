@@ -128,8 +128,8 @@ const OrderCreatePage = (() => {
       formData._customer_text = document.getElementById('form-customer-text')?.value || '';
     }
 
-    // Quick validation
-    const v = OrderCreate.validateOrderForm(formData, []);
+    // Quick validation — skip steps check (user hasn't seen Step 2 yet)
+    const v = OrderCreate.validateOrderForm(formData, [], { checkSteps: false });
     if (!v.valid) {
       document.getElementById('step1-errors').innerHTML = v.errors.map(e => `<div>· ${escapeHTML(e)}</div>`).join('');
       return;
