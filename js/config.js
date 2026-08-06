@@ -9,6 +9,10 @@ const CONFIG = {
 
   // Business
   STALL_DAYS: 3,
+  UNDO_WINDOW_MINUTES: 5,
+
+  // Department order (for cross-dept flow)
+  DEPT_ORDER: ['制一', '制二', '制三', '制四', '总QC'],
 
   // Pagination
   PAGE_SIZE: 20,

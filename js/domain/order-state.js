@@ -8,9 +8,12 @@ const OrderState = (() => {
 
   /**
    * Derive order status from its nodes.
-   * ADL-003: in_production / paused / completed
+   * ADL-003: in_production / paused / completed / cancelled
    */
-  function derive(nodes) {
+  function derive(nodes, currentStatus) {
+    // cancelled is terminal — never override
+    if (currentStatus === 'cancelled') return 'cancelled';
+
     if (!nodes || nodes.length === 0) return 'in_production';
 
     const allDone = nodes.every(n => n.status === 'done');

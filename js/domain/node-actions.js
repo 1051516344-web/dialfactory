@@ -29,17 +29,28 @@ const NodeActions = (() => {
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
     const updatedNode = r1.data;
 
-    // Auto-activate next waiting node
+    // Auto-activate next waiting node (with empty dept skip — Issue I-1)
     let activatedNode = null;
     let warning = null;
     const sorted = [...(order.nodes || [])].sort((a, b) => a.seq - b.seq);
-    const nextNode = sorted.find(n => n.seq > node.seq);
-    if (nextNode && nextNode.status === 'waiting') {
-      const r2 = await OrdersAPI.updateNode(nextNode.id, { status: 'active' });
-      if (r2.ok) {
-        activatedNode = r2.data;
-      } else {
-        warning = 'downstream_activation_failed';
+    const nextBySeq = sorted.find(n => n.seq > node.seq);
+
+    if (nextBySeq) {
+      // Same dept: activate directly
+      if (nextBySeq.dept_id === node.dept_id && nextBySeq.status === 'waiting') {
+        const r2 = await OrdersAPI.updateNode(nextBySeq.id, { status: 'active' });
+        if (r2.ok) activatedNode = r2.data;
+        else warning = 'downstream_activation_failed';
+      }
+      // Different dept: check if current dept is fully done
+      else if (nextBySeq.dept_id !== node.dept_id) {
+        const currentDeptNodes = sorted.filter(n => n.dept_id === node.dept_id);
+        const allDeptDone = currentDeptNodes.every(n => n.status === 'done');
+        if (allDeptDone && nextBySeq.status === 'waiting') {
+          const r2 = await OrdersAPI.updateNode(nextBySeq.id, { status: 'active' });
+          if (r2.ok) activatedNode = r2.data;
+          else warning = 'downstream_activation_failed';
+        }
       }
     }
 
@@ -232,5 +243,141 @@ const NodeActions = (() => {
     return { ok: true, exception: r.data };
   }
 
-  return { advance, pause, resume, rework, append, recordException };
+  // ==========================================================
+  // M7 · undo — reverse last status change within time window
+  // ==========================================================
+  async function undo(order, node) {
+    const UNDO_MS = (CONFIG.UNDO_WINDOW_MINUTES || 5) * 60 * 1000;
+    const elapsed = Date.now() - new Date(node.updated_at).getTime();
+    if (elapsed > UNDO_MS) {
+      return { ok: false, error: '已超过撤销时间窗口', phase: 'timeout' };
+    }
+
+    // F2: completed order
+    if (order.status === 'completed') {
+      return { ok: false, error: '已完成订单不可撤销', phase: 'forbidden' };
+    }
+    // F3: cancelled order
+    if (order.status === 'cancelled') {
+      return { ok: false, error: '已取消订单不可撤销', phase: 'forbidden' };
+    }
+    // F5: rework nodes in a segment batch
+    if (node.rework_pass > 0) {
+      return { ok: false, error: '返工节点不可单独撤销', phase: 'forbidden' };
+    }
+
+    const undoMap = {
+      'done':   { target: 'active',  cascade: true },
+      'paused': { target: 'active',  cascade: false },
+      'active': { target: 'waiting', cascade: false }
+    };
+    const action = undoMap[node.status];
+    if (!action) return { ok: false, error: '当前状态不支持撤销', phase: 'primary' };
+
+    // F4/F6: check downstream
+    if (action.cascade) {
+      const nodes = (order.nodes || []).sort((a, b) => a.seq - b.seq);
+      const nextNode = nodes.find(n => n.seq > node.seq);
+      if (nextNode && nextNode.status !== 'waiting' && nextNode.status !== 'active') {
+        return { ok: false, error: '下游节点已开始处理，无法撤销', phase: 'forbidden' };
+      }
+    }
+
+    // Execute undo
+    const r1 = await OrdersAPI.updateNode(node.id, {
+      status: action.target,
+      pause_reason: null
+    });
+    if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
+
+    // Cascade: deactivate downstream if it was auto-activated
+    let warning = null;
+    if (action.cascade) {
+      const nodes = (order.nodes || []).sort((a, b) => a.seq - b.seq);
+      const nextNode = nodes.find(n => n.seq > node.seq);
+      if (nextNode && nextNode.status === 'active') {
+        const r2 = await OrdersAPI.updateNode(nextNode.id, { status: 'waiting' });
+        if (!r2.ok) warning = 'downstream_deactivation_failed';
+      }
+    }
+
+    const updatedNodes = (order.nodes || []).map(n => {
+      if (n.id === node.id) return r1.data;
+      return n;
+    });
+    const newStatus = OrderState.derive(updatedNodes, order.status);
+    await OrdersAPI.updateStatus(order.id, newStatus);
+
+    return { ok: true, updatedNode: r1.data, newOrderStatus: newStatus, warning };
+  }
+
+  // ==========================================================
+  // M8 · reworkSegment — batch rework for department segment
+  // ==========================================================
+  async function reworkSegment(order, failedNode, restartCode) {
+    if (!failedNode.process_id) {
+      return { ok: false, error: '节点无关联工序', phase: 'primary' };
+    }
+
+    const nodes = (order.nodes || []).sort((a, b) => a.seq - b.seq);
+    const deptNodes = nodes.filter(n => n.dept_id === failedNode.dept_id);
+    if (deptNodes.length === 0) {
+      return { ok: false, error: '无法确定部门工序段', phase: 'primary' };
+    }
+
+    // Determine range: from restartCode (or first dept process) to failedNode
+    const rangeStart = restartCode
+      ? deptNodes.find(n => n.process_code === restartCode)
+      : deptNodes[0];
+    if (!rangeStart) {
+      return { ok: false, error: '未找到返工起始工序', phase: 'primary' };
+    }
+
+    const rangeNodes = deptNodes.filter(n =>
+      n.seq >= rangeStart.seq && n.seq <= failedNode.seq
+    );
+    if (rangeNodes.length === 0) {
+      return { ok: false, error: '返工范围为空', phase: 'primary' };
+    }
+
+    // Batch INSERT new nodes
+    const basePass = (failedNode.rework_pass || 0) + 1;
+    const { seq: newSeq, needsBump, bumpFrom } = SeqCalc.gapInsertion(nodes, failedNode.seq);
+
+    let currentSeq = newSeq;
+    let firstNewId = null;
+
+    for (const orig of rangeNodes) {
+      const r = await OrdersAPI.insertNode({
+        order_id:     order.id,
+        process_id:   orig.process_id,
+        process_name: orig.process_name,
+        process_code: orig.process_code,
+        dept_id:      orig.dept_id,
+        dept_name:    orig.dept_name,
+        seq:          currentSeq,
+        rework_pass:  basePass,
+        status:       (orig === rangeNodes[0]) ? 'active' : 'waiting',
+        note:         `Segment rework from ${rangeStart.process_code}`
+      });
+      if (!r.ok) return { ok: false, error: r.error, phase: 'primary' };
+      if (!firstNewId) firstNewId = r.data.id;
+      currentSeq += 2; // micro-gap within segment
+    }
+
+    // Bump if needed
+    let warning = null;
+    if (needsBump) {
+      const br = await OrdersAPI.bumpSeq(order.id, bumpFrom, SeqCalc.GAP_STEP, firstNewId);
+      if (!br.ok) warning = 'seq_bump_failed';
+    }
+
+    const allNodes = [...nodes, ...rangeNodes.map(() => ({}))]; // placeholder
+    const newStatus = OrderState.derive(nodes, order.status);
+    await OrdersAPI.updateStatus(order.id, newStatus);
+
+    return { ok: true, newSeq, needsBump, newOrderStatus: newStatus, warning };
+  }
+
+  return { advance, pause, resume, rework, append, recordException, undo, reworkSegment };
 })();

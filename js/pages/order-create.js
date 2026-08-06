@@ -7,25 +7,42 @@ const OrderCreatePage = (() => {
 
   let step = 1;
   let formData = {};
-  let routeSteps = [];
+  let processList = [];    // all 35 processes for Route Builder
+  let selectedMap = {};    // process_id -> boolean
 
   async function render() {
     step = 1;
     formData = {};
-    routeSteps = [];
+    processList = [];
+    selectedMap = {};
 
     const container = document.getElementById('page-container');
     if (!container) return;
 
-    const [custResult, routeResult] = await Promise.all([
+    const [custResult, procResult] = await Promise.all([
       CustomersAPI.list(),
-      ProcessesAPI.listRoutes()
+      ProcessesAPI.listProcesses()
     ]);
     const customers = custResult.ok ? custResult.data : [];
-    const routes = routeResult.ok ? routeResult.data : [];
+    processList = procResult.ok ? procResult.data : [];
 
-    renderStep1(container, customers, routes);
+    // Pre-load dept names
+    if (processList.length > 0) {
+      const deptIds = [...new Set(processList.map(p => p.default_dept_id).filter(Boolean))];
+      if (deptIds.length > 0) {
+        for (const did of deptIds) {
+          if (!deptCache[did]) {
+            const { ok, data } = await DB.call(DB.get().from('departments').select('name').eq('id', did).single());
+            if (ok && data) deptCache[did] = data.name;
+          }
+        }
+      }
+    }
+
+    renderStep1(container, customers);
   }
+
+  let deptCache = {};
 
   // ==========================================================
   // Step 1: Basic Info
@@ -87,11 +104,6 @@ const OrderCreatePage = (() => {
         </div>
 
         <div class="form-group">
-          <label class="form-label">工艺路线 *</label>
-          <select id="form-route" class="form-select"><option value="">— 请选择 —</option>${routeOptions}</select>
-        </div>
-
-        <div class="form-group">
           <label class="form-label">备注</label>
           <textarea id="form-note" class="form-textarea" rows="2" placeholder="选填">${escapeHTML(formData.note || '')}</textarea>
         </div>
@@ -106,10 +118,9 @@ const OrderCreatePage = (() => {
   }
 
   // ==========================================================
-  // Step 2: Route Confirmation (ADL-001)
+  // Step 2: Route Builder — Dept-grouped checklist
   // ==========================================================
   async function goToStep2() {
-    // Collect form data
     const container = document.getElementById('page-container');
     formData.order_no    = document.getElementById('form-order-no')?.value || '';
     formData.order_qty   = document.getElementById('form-qty')?.value || '';
@@ -117,18 +128,18 @@ const OrderCreatePage = (() => {
     formData.base_texture = document.getElementById('form-texture')?.value || '';
     formData.plate_color = document.getElementById('form-color')?.value || '';
     formData.sand_type   = document.getElementById('form-sand')?.value || '';
-    formData.route_id    = document.getElementById('form-route')?.value || '';
     formData.note        = document.getElementById('form-note')?.value || '';
+    formData.route_id    = null;
+    formData.source      = 'manual';
 
     const custSelect = document.getElementById('form-customer');
     if (custSelect) {
       formData.customer_id = custSelect.value || null;
     } else {
       formData.customer_id = null;
-      formData._customer_text = document.getElementById('form-customer-text')?.value || '';
     }
 
-    // Quick validation — skip steps check (user hasn't seen Step 2 yet)
+    // Skip steps check
     const v = OrderCreate.validateOrderForm(formData, [], { checkSteps: false });
     if (!v.valid) {
       document.getElementById('step1-errors').innerHTML = v.errors.map(e => `<div>· ${escapeHTML(e)}</div>`).join('');
@@ -142,76 +153,75 @@ const OrderCreatePage = (() => {
       return;
     }
 
-    // Load route steps
-    const route = document.getElementById('form-route')?.selectedOptions?.[0];
-    formData.route_name = route?.text?.split(' (')[0] || '';
-
-    container.innerHTML = `<div class="page-header"><h1>确认工序</h1></div>${Skeleton.cards(3)}`;
-
-    const { ok: rok, data: routeData } = await ProcessesAPI.getRouteWithSteps(formData.route_id);
-    if (!rok) {
-      container.innerHTML = `
-        <div class="page-header"><h1>确认工序</h1></div>
-        <div class="card" style="text-align:center;"><p style="color:var(--color-danger);">无法加载路线步骤</p></div>
-      `;
-      return;
-    }
-
-    routeSteps = (routeData.steps || []).map(s => ({
-      ...s,
-      confirmed: true  // default: all confirmed
-    }));
+    // Init selection: none checked initially
+    selectedMap = {};
+    processList.forEach(p => { selectedMap[p.id] = false; });
 
     step = 2;
     renderStep2(container);
   }
 
   function renderStep2(container) {
-    const rows = routeSteps.map((s, i) => {
-      const locked = s.is_required;
-      const status = locked ? 'locked' : (s.confirmed ? 'confirmed' : 'cancelled');
-      const label = locked ? '🔒 必修' : (s.confirmed ? '✅ 确认' : '❌ 取消');
-      const click = locked ? '' : `onclick="OrderCreatePage.toggleStep(${i})"`;
+    // Group processes by department
+    const deptGroups = {};
+    processList.forEach(p => {
+      const deptName = deptCache[p.default_dept_id] || '其他';
+      if (!deptGroups[deptName]) deptGroups[deptName] = [];
+      deptGroups[deptName].push(p);
+    });
 
-      return `
-        <div class="route-step-row">
-          <span class="route-step-seq">${s.seq}</span>
-          <div class="route-step-info">
-            <span class="route-step-name">${escapeHTML(s.code)} ${escapeHTML(s.name)}</span>
-            <span class="route-step-dept">${escapeHTML(s.type)} · ${escapeHTML(s.dept_name || '—')}</span>
-          </div>
-          ${locked ? '<span class="route-step-required">必修</span>' : ''}
-          <span class="route-step-toggle ${status}" ${click}>${label}</span>
+    // Sort depts by config order
+    const sortedDepts = CONFIG.DEPT_ORDER.filter(d => deptGroups[d]);
+    // Add any depts not in config order
+    Object.keys(deptGroups).forEach(d => {
+      if (!sortedDepts.includes(d)) sortedDepts.push(d);
+    });
+
+    const deptSections = sortedDepts.map(deptName => {
+      const procs = deptGroups[deptName].sort((a, b) => a.code.localeCompare(b.code));
+      const checks = procs.map(p => {
+        const checked = selectedMap[p.id] ? 'checked' : '';
+        return `<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:0.85rem;cursor:pointer;">
+          <input type="checkbox" ${checked} onchange="OrderCreatePage.toggleProcess('${p.id}')" style="cursor:pointer;">
+          <span>${escapeHTML(p.code)} ${escapeHTML(p.name)}</span>
+        </label>`;
+      }).join('');
+
+      return `<div style="margin-bottom:var(--space-md);">
+        <div style="font-weight:600;font-size:0.9rem;margin-bottom:4px;color:var(--text-secondary);">
+          ${escapeHTML(deptName)} (${procs.length})
         </div>
-      `;
+        <div style="display:flex;flex-wrap:wrap;">${checks}</div>
+      </div>`;
     }).join('');
 
-    const confirmedCount = routeSteps.filter(s => s.confirmed).length;
-    const cancelledCount = routeSteps.filter(s => !s.confirmed).length;
+    const selectedCount = Object.values(selectedMap).filter(Boolean).length;
 
     container.innerHTML = `
       <div class="page-header">
         <a href="javascript:OrderCreatePage.backToStep1()" class="btn btn-ghost" style="font-size:0.85rem;">← 返回修改</a>
-        <h1>确认工序</h1>
+        <h1>建立生产路线</h1>
       </div>
 
       <div class="card">
-        <div style="margin-bottom:var(--space-md);color:var(--text-secondary);font-size:var(--font-size-sm);">
-          路线: <strong>${escapeHTML(formData.route_name)}</strong><br>
-          以下为该路线的全部建议工序。必修工序 (🔒) 不可取消。
+        <div style="margin-bottom:var(--space-md);">
+          <input type="text" class="form-input" placeholder="搜索工序名称或编号..." style="max-width:300px;"
+                 oninput="OrderCreatePage.filterProcesses(this.value)">
         </div>
 
-        ${rows}
+        <div id="dept-sections">
+          ${deptSections}
+        </div>
 
         <div style="margin-top:var(--space-md);padding-top:var(--space-md);border-top:1px solid var(--bg-muted);
                     display:flex;justify-content:space-between;align-items:center;">
           <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">
-            已确认: ${confirmedCount} 道 · 已取消: ${cancelledCount} 道
+            已选择: ${selectedCount} 道工序
           </span>
           <div style="display:flex;gap:var(--space-sm);">
             <button class="btn btn-ghost" onclick="OrderCreatePage.backToStep1()">← 返回修改</button>
             <button class="btn btn-primary" id="btn-submit"
-                    ${confirmedCount === 0 ? 'disabled' : ''}
+                    ${selectedCount === 0 ? 'disabled' : ''}
                     onclick="OrderCreatePage.submitOrder()">创建订单 ✓</button>
           </div>
         </div>
@@ -219,10 +229,23 @@ const OrderCreatePage = (() => {
     `;
   }
 
-  function toggleStep(index) {
-    if (routeSteps[index].is_required) return;
-    routeSteps[index].confirmed = !routeSteps[index].confirmed;
+  function toggleProcess(processId) {
+    selectedMap[processId] = !selectedMap[processId];
     renderStep2(document.getElementById('page-container'));
+  }
+
+  function filterProcesses(query) {
+    if (!query || !query.trim()) {
+      // Show all
+      document.querySelectorAll('#dept-sections label').forEach(el => el.style.display = '');
+      document.querySelectorAll('#dept-sections > div > div:first-child').forEach(el => el.style.display = '');
+      return;
+    }
+    const q = query.trim().toLowerCase();
+    document.querySelectorAll('#dept-sections label').forEach(el => {
+      const text = el.textContent.toLowerCase();
+      el.style.display = text.includes(q) ? '' : 'none';
+    });
   }
 
   function backToStep1() {
@@ -237,7 +260,18 @@ const OrderCreatePage = (() => {
     const btn = document.getElementById('btn-submit');
     if (btn) { btn.disabled = true; btn.textContent = '创建中...'; }
 
-    const result = await OrderCreate.submit(formData, routeSteps);
+    // Build selected steps from processList + selectedMap + deptCache
+    const selectedSteps = processList.map(p => ({
+      process_id: p.id,
+      process_code: p.code,
+      process_name: p.name,
+      dept_id: p.default_dept_id,
+      dept_name: deptCache[p.default_dept_id] || '',
+      selected: !!selectedMap[p.id]
+    }));
+
+    formData.source = 'manual';
+    const result = await OrderCreate.submit(formData, selectedSteps);
 
     if (result.ok) {
       Router.navigate('/orders/' + result.orderId);
@@ -254,5 +288,5 @@ const OrderCreatePage = (() => {
     return div.innerHTML;
   }
 
-  return { render, goToStep2, toggleStep, backToStep1, submitOrder };
+  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder };
 })();

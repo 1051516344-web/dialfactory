@@ -73,6 +73,10 @@ const DashboardPage = (() => {
           <div class="stats-value">${stats.completed}</div>
           <div class="stats-label">已完成</div>
         </div>
+        <div class="card stats-card" style="border-top:3px solid #9CA3AF;" onclick="Router.navigate('/orders')">
+          <div class="stats-value" style="color:#9CA3AF;">${stats.cancelled}</div>
+          <div class="stats-label">已取消</div>
+        </div>
       </div>
 
       ${renderStalledSection(stalledItems, orders)}
@@ -82,13 +86,14 @@ const DashboardPage = (() => {
   }
 
   function computeStats(orders) {
-    let inProduction = 0, paused = 0, completed = 0;
+    let inProduction = 0, paused = 0, completed = 0, cancelled = 0;
     for (const o of orders) {
       if (o.status === 'in_production') inProduction++;
       else if (o.status === 'paused') paused++;
       else if (o.status === 'completed') completed++;
+      else if (o.status === 'cancelled') cancelled++;
     }
-    return { inProduction, paused, completed };
+    return { inProduction, paused, completed, cancelled };
   }
 
   function computeStalled(activeNodes) {

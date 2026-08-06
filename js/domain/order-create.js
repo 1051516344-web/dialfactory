@@ -9,9 +9,13 @@ const OrderCreate = (() => {
    * Submit order creation.
    * @returns { ok, orderId } | { ok: false, error, errors? }
    */
-  async function submit(formData, confirmedSteps) {
+  /**
+   * Submit order creation.
+   * selectedSteps: processes chosen by supervisor (selected=true).
+   */
+  async function submit(formData, selectedSteps) {
     // 1. Validate
-    const v = validateOrderForm(formData, confirmedSteps);
+    const v = validateOrderForm(formData, selectedSteps);
     if (!v.valid) return { ok: false, error: v.errors[0], errors: v.errors };
 
     // 2. Check unique order_no
@@ -20,19 +24,20 @@ const OrderCreate = (() => {
       return { ok: false, error: '订单编号已存在', errors: ['订单编号已存在'] };
     }
 
-    // 3. Build route_snapshot (REVISION 3)
+    // 3. Build route_snapshot
+    const allSteps = selectedSteps.map((s, i) => ({
+      seq: i + 1,
+      process_code: s.process_code,
+      process_name: s.process_name,
+      dept_name: s.dept_name || '',
+      selected: s.selected
+    }));
+
     const snapshot = {
-      route_id: formData.route_id,
-      route_name: formData.route_name || '',
+      source: formData.source || 'manual',
+      source_order_id: formData.source_order_id || null,
       snapshot_at: new Date().toISOString(),
-      steps: confirmedSteps.map(s => ({
-        seq: s.seq,
-        process_code: s.process_code,
-        process_name: s.process_name,
-        dept_name: s.dept_name,
-        is_required: s.is_required || false,
-        confirmed: s.confirmed
-      }))
+      steps: allSteps
     };
 
     // 4. Build order data
@@ -50,15 +55,19 @@ const OrderCreate = (() => {
       note:          formData.note || null
     };
 
-    // 5. Build nodes data with gap-based seq (REVISION 2)
-    const activeNodes = confirmedSteps.filter(s => s.confirmed);
-    const nodesData = activeNodes.map((s, i) => ({
+    // 5. Build nodes data — only selected processes
+    const selected = selectedSteps.filter(s => s.selected);
+    if (selected.length === 0) {
+      return { ok: false, error: '请至少选择一道工序', errors: ['请至少选择一道工序'] };
+    }
+
+    const nodesData = selected.map((s, i) => ({
       process_id:   s.process_id,
       process_name: s.process_name,
       process_code: s.process_code,
       dept_id:      s.dept_id,
-      dept_name:    s.dept_name,
-      seq:          (i + 1) * 10,        // 10, 20, 30, ...
+      dept_name:    s.dept_name || '',
+      seq:          (i + 1) * 10,
       rework_pass:  0,
       status:       i === 0 ? 'active' : 'waiting'
     }));
@@ -71,9 +80,9 @@ const OrderCreate = (() => {
   }
 
   /**
-   * Validate order form and confirmed steps.
+   * Validate order form. No is_required checks. No route_id requirement.
    */
-  function validateOrderForm(formData, confirmedSteps, { checkSteps = true } = {}) {
+  function validateOrderForm(formData, selectedSteps, { checkSteps = true } = {}) {
     const errors = [];
 
     if (!formData.order_no || !formData.order_no.trim()) {
@@ -89,14 +98,12 @@ const OrderCreate = (() => {
       const today = new Date(); today.setHours(0, 0, 0, 0);
       if (d < today) errors.push('交期不能早于今天');
     }
-    if (!formData.route_id) {
-      errors.push('请选择工艺路线');
-    }
+    // route_id is optional — supervisor may build route manually
 
     if (checkSteps) {
-      const confirmedCount = (confirmedSteps || []).filter(s => s.confirmed).length;
-      if (confirmedCount === 0) {
-        errors.push('至少确认一道工序');
+      const selectedCount = (selectedSteps || []).filter(s => s.selected).length;
+      if (selectedCount === 0) {
+        errors.push('请至少选择一道工序');
       }
     }
 

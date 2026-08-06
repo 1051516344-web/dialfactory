@@ -424,5 +424,100 @@ const OrderDetailPage = (() => {
     return div.innerHTML;
   }
 
-  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException };
+  // ==========================================================
+  // Undo, Cancel, Segment Rework (V1.1)
+  // ==========================================================
+  async function onUndo(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const result = await NodeActions.undo(currentOrder, node);
+    handleActionResult(result);
+  }
+
+  async function onCancelOrder() {
+    ConfirmDialog.show({
+      title: '确认取消订单',
+      content: `<p>确认取消订单 <strong>#${escapeHTML(currentOrder.order_no)}</strong>？</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">取消后所有进行中的工序将暂停。此操作不可撤销。</p>`,
+      confirmLabel: '确认取消',
+      dangerous: true,
+      onConfirm: async () => {
+        // Set all active/waiting nodes to paused
+        for (const n of currentNodeList) {
+          if (n.status === 'active' || n.status === 'waiting') {
+            await OrdersAPI.updateNode(n.id, { status: 'paused', pause_reason: '订单已取消' });
+          }
+        }
+        await OrdersAPI.updateStatus(currentOrder.id, 'cancelled');
+        currentOrder.status = 'cancelled';
+        Toast.info('订单已取消');
+        renderFull(document.getElementById('page-container'));
+      }
+    });
+  }
+
+  async function onSegmentRework(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const deptNodes = currentNodeList.filter(n => n.dept_id === node.dept_id).sort((a, b) => a.seq - b.seq);
+    const firstInDept = deptNodes[0];
+    const rangeDesc = firstInDept
+      ? `从 ${escapeHTML(firstInDept.process_code)} ${escapeHTML(firstInDept.process_name)} 到 ${escapeHTML(node.process_code)} ${escapeHTML(node.process_name)}`
+      : `部门段返工`;
+
+    ConfirmDialog.show({
+      title: '确认部门段返工',
+      content: `<p>将对 <strong>${escapeHTML(node.dept_name || '本部门')}</strong> 执行段返工。</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">${rangeDesc}</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">原始节点将保留。新节点将创建。</p>`,
+      confirmLabel: '确认返工',
+      onConfirm: async () => {
+        const result = await NodeActions.reworkSegment(currentOrder, node);
+        handleActionResult(result);
+      }
+    });
+  }
+
+  // Add cancel button to info section + undo button to node cards
+  const origRenderFull = renderFull;
+  renderFull = function(container) {
+    origRenderFull(container);
+    // Add cancel button if applicable
+    if (currentOrder.status !== 'completed' && currentOrder.status !== 'cancelled') {
+      const header = container.querySelector('.page-header');
+      if (header) {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn btn-danger btn-sm';
+        cancelBtn.textContent = '取消订单';
+        cancelBtn.style.cssText = 'margin-left:auto;font-size:0.8rem;';
+        cancelBtn.onclick = onCancelOrder;
+        header.appendChild(cancelBtn);
+      }
+    }
+  };
+
+  // Override renderNodeCard to include undo + segment rework buttons
+  const origRenderNodeCard = renderNodeCard;
+  renderNodeCard = function(node, exceptions) {
+    let html = origRenderNodeCard(node, exceptions);
+    // Add undo button if within time window and status allows
+    const elapsed = Date.now() - new Date(node.updated_at).getTime();
+    const undoWindow = (CONFIG.UNDO_WINDOW_MINUTES || 5) * 60 * 1000;
+    const canUndo = (node.status === 'done' || node.status === 'paused' || node.status === 'active')
+                    && elapsed < undoWindow
+                    && currentOrder.status !== 'completed'
+                    && currentOrder.status !== 'cancelled'
+                    && (node.rework_pass || 0) === 0;
+    if (canUndo) {
+      html = html.replace('</div>', `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onUndo('${node.id}')" style="font-size:0.7rem;padding:2px 6px;margin-left:4px;">撤销</button></div>`);
+    }
+    // Add segment rework button on done nodes
+    const actions = NodeState.getAvailableActions(node);
+    if (node.status === 'done' && node.dept_id && currentOrder.status !== 'completed' && currentOrder.status !== 'cancelled') {
+      html = html.replace('</div>', `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onSegmentRework('${node.id}')" style="margin-left:4px;">段返工</button></div>`);
+    }
+    return html;
+  };
+
+  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework };
 })();
