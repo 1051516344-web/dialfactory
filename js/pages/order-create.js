@@ -47,14 +47,10 @@ const OrderCreatePage = (() => {
   // ==========================================================
   // Step 1: Basic Info
   // ==========================================================
-  function renderStep1(container, customers, routes) {
+  function renderStep1(container, customers) {
     const custOptions = customers.length > 0
       ? customers.map(c => `<option value="${c.id}">${escapeHTML(c.name)}</option>`).join('')
       : '<option value="">— 暂无客户数据，可手动输入 —</option>';
-
-    const routeOptions = routes.map(r =>
-      `<option value="${r.id}">${escapeHTML(r.name)} (${r.steps?.length || 0}道工序)</option>`
-    ).join('');
 
     const texOptions = CONFIG.BASE_TEXTURES.map(t => `<option value="${t}">${t}</option>`).join('');
     const sandOptions = CONFIG.SAND_TYPES.map(t => `<option value="${t}">${t}</option>`).join('');
