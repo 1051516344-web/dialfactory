@@ -26,7 +26,7 @@ const RouteListPage = (() => {
         </div>
         <div class="card" style="text-align:center;padding:var(--space-xl);">
           <p style="font-size:2rem;margin-bottom:var(--space-md);">⚠️</p>
-          <p style="color:var(--color-danger);">加载失败：${DOM.escapeHTML ? DOM.escapeHTML(error) : error}</p>
+          <p style="color:var(--color-danger);">加载失败：${escapeHTML(error)}</p>
           <button class="btn btn-primary" style="margin-top:var(--space-md);" onclick="RouteListPage.render()">重试</button>
         </div>
       `;
@@ -82,10 +82,6 @@ const RouteListPage = (() => {
   }
 
   function renderStepRow(step) {
-    const requiredMark = step.is_required
-      ? '<span class="route-step-required">必修</span>'
-      : '';
-
     return `
       <div class="route-step-row">
         <span class="route-step-seq">${step.seq}</span>
@@ -93,7 +89,6 @@ const RouteListPage = (() => {
           <span class="route-step-name">${escapeHTML(step.code)} ${escapeHTML(step.name)}</span>
           <span class="route-step-dept">${escapeHTML(step.type)}</span>
         </div>
-        ${requiredMark}
       </div>
     `;
   }
