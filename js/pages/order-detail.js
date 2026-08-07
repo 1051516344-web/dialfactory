@@ -470,13 +470,16 @@ const OrderDetailPage = (() => {
     const nodeCount = currentNodeList.length;
     const exceptionCount = currentExceptions.length;
 
+    const customerName = currentOrder.customer?.name || '—';
+
     ConfirmDialog.show({
       title: '试运行清理',
       content: `<p style="color:var(--color-danger);">该功能仅用于删除试运行阶段错误录入的数据。</p>
                 <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">真实生产订单请使用取消订单。</p>
+                <p><strong>#${escapeHTML(currentOrder.order_no)}</strong> · ${escapeHTML(customerName)}</p>
                 ${nodeCount > 0 ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">将同时删除 ${nodeCount} 个工序节点。</p>` : ''}
                 ${exceptionCount > 0 ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">将同时删除 ${exceptionCount} 条异常记录。</p>` : ''}
-                <p style="font-weight:600;">确认清理 #${escapeHTML(currentOrder.order_no)}？</p>`,
+                <p style="color:var(--color-danger);font-size:var(--font-size-sm);">⚠ 此操作将永久删除数据，不可恢复。</p>`,
       confirmLabel: '确认清理',
       dangerous: true,
       onConfirm: async () => {
