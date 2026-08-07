@@ -49,7 +49,7 @@ const OrderCreatePage = (() => {
   // ==========================================================
   function renderStep1(container, customers) {
     const custOptions = customers.length > 0
-      ? customers.map(c => `<option value="${c.id}">${escapeHTML(c.name)}</option>`).join('')
+      ? customers.map(c => `<option value="${c.id}">${escapeHTML(c.short_name || c.name)}</option>`).join('')
       : '<option value="">— 暂无客户数据，可手动输入 —</option>';
 
     const texOptions = CONFIG.BASE_TEXTURES.map(t => `<option value="${t}">${t}</option>`).join('');

@@ -71,7 +71,7 @@ const OrderDetailPage = (() => {
 
       <div class="card">
         <div style="display:flex;flex-wrap:wrap;gap:var(--space-md);font-size:var(--font-size-sm);">
-          <div><span style="color:var(--text-secondary);">客户:</span> ${escapeHTML(order.customer?.name || '—')}</div>
+          <div><span style="color:var(--text-secondary);">客户:</span> ${escapeHTML(order.customer?.short_name || order.customer?.name || '—')}</div>
           <div><span style="color:var(--text-secondary);">数量:</span> ${Format.number(order.order_qty)}件</div>
           <div><span style="color:var(--text-secondary);">交期:</span> ${Format.date(order.due_date)} (${Format.dueDays(order.due_date)})</div>
           <div><span style="color:var(--text-secondary);">规格:</span> ${escapeHTML(specText)}</div>
@@ -470,7 +470,7 @@ const OrderDetailPage = (() => {
     const nodeCount = currentNodeList.length;
     const exceptionCount = currentExceptions.length;
 
-    const customerName = currentOrder.customer?.name || '—';
+    const customerName = currentOrder.customer?.short_name || currentOrder.customer?.name || '—';
 
     ConfirmDialog.show({
       title: '试运行清理',

@@ -198,7 +198,7 @@ const OrderListPage = (() => {
       <div class="card order-card" onclick="Router.navigate('/orders/${order.id}')">
         <div class="order-card-header">
           <span class="order-card-order-no">#${escapeHTML(order.order_no)}</span>
-          <span class="order-card-customer">${escapeHTML(order.customer?.name || '—')}</span>
+          <span class="order-card-customer">${escapeHTML(order.customer?.short_name || order.customer?.name || '—')}</span>
           ${StatusBadge.render(derivedStatus)}
         </div>
         <div class="order-card-meta">

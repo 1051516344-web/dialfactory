@@ -7,7 +7,7 @@ const CustomersAPI = (() => {
   async function list() {
     return DB.call(
       DB.get().from('customers')
-        .select('id, name, code')
+        .select('id, name, code, short_name')
         .eq('is_active', true)
         .order('name', { ascending: true })
     );
@@ -17,12 +17,20 @@ const CustomersAPI = (() => {
     if (!query || query.trim().length === 0) return list();
     return DB.call(
       DB.get().from('customers')
-        .select('id, name, code')
+        .select('id, name, code, short_name')
         .eq('is_active', true)
         .ilike('name', `%${query.trim()}%`)
         .order('name', { ascending: true })
     );
   }
 
-  return { list, search };
+  /**
+   * Display name: short_name if available, otherwise full name.
+   */
+  function displayName(customer) {
+    if (!customer) return '—';
+    return customer.short_name || customer.name || '—';
+  }
+
+  return { list, search, displayName };
 })();

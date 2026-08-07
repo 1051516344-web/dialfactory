@@ -27,7 +27,7 @@ const OrdersAPI = (() => {
 
     // Build query
     let query = db.from('orders')
-      .select('*, customer:customers(name)', { count: 'exact' });
+      .select('*, customer:customers(name, short_name)', { count: 'exact' });
 
     if (status)   query = query.eq('status', status);
     if (customerId) query = query.eq('customer_id', customerId);
@@ -49,7 +49,7 @@ const OrdersAPI = (() => {
     const [orderResult, nodesResult] = await Promise.all([
       DB.call(
         db.from('orders')
-          .select('*, customer:customers(name)')
+          .select('*, customer:customers(name, short_name)')
           .eq('id', orderId)
           .single()
       ),
