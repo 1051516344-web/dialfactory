@@ -460,41 +460,32 @@ const OrderDetailPage = (() => {
   // Trial Delete (temporary safety patch)
   // ==========================================================
   async function onDeleteOrder() {
-    // Safety checks
+    // Trial Cleanup — Revised Rules (Phase 3-B.3)
+    // Only reject: completed orders
+    // Nodes (waiting/active/paused), exceptions, and rework ARE allowed during trial
     if (currentOrder.status === 'completed') {
-      Toast.error('已完成订单不可删除'); return;
+      Toast.error('已完成订单不可清理'); return;
     }
-    const hasExceptions = currentExceptions.length > 0;
-    if (hasExceptions) {
-      Toast.error('订单包含异常记录，不可删除'); return;
-    }
-    const hasCompletedNodes = currentNodeList.some(n => n.status === 'done');
-    if (hasCompletedNodes) {
-      Toast.error('订单包含已完成节点，不可删除'); return;
-    }
-    const hasRework = currentNodeList.some(n => (n.rework_pass || 0) > 0);
-    if (hasRework) {
-      Toast.error('订单包含返工节点，不可删除'); return;
-    }
-    const elapsed = Date.now() - new Date(currentOrder.created_at).getTime();
-    if (elapsed > 24 * 60 * 60 * 1000) {
-      Toast.error('订单创建超过24小时，不可删除'); return;
-    }
+
+    const nodeCount = currentNodeList.length;
+    const exceptionCount = currentExceptions.length;
 
     ConfirmDialog.show({
       title: '试运行清理',
       content: `<p style="color:var(--color-danger);">该功能仅用于删除试运行阶段错误录入的数据。</p>
                 <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">真实生产订单请使用取消订单。</p>
+                ${nodeCount > 0 ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">将同时删除 ${nodeCount} 个工序节点。</p>` : ''}
+                ${exceptionCount > 0 ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">将同时删除 ${exceptionCount} 条异常记录。</p>` : ''}
                 <p style="font-weight:600;">确认清理 #${escapeHTML(currentOrder.order_no)}？</p>`,
       confirmLabel: '确认清理',
       dangerous: true,
       onConfirm: async () => {
         const result = await OrdersAPI.deleteOrder(currentOrder.id);
         if (result.ok) {
-          Toast.success('订单已删除');
+          Toast.success('订单已清理');
           Router.navigate('/orders');
         } else {
-          Toast.error(result.error || '删除失败');
+          Toast.error(result.error || '清理失败');
         }
       }
     });
