@@ -663,19 +663,24 @@
   min-width: 0;
 }
 
-.tpl-name {
+.tpl-signature {
   font-weight: 600;
   color: #0F172A;
   font-size: var(--font-size-sm);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tpl-badge {
+.tpl-order-count {
   font-size: 0.7rem;
   color: #64748B;
   background: #F1F5F9;
   padding: 2px 8px;
   border-radius: 10px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tpl-col-count {

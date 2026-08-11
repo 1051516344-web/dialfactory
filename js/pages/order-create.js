@@ -346,7 +346,7 @@ const OrderCreatePage = (() => {
             department: s.dept_name
           }));
         if (templateProcessList.length > 0) {
-          const rtResult = await RouteTemplatesAPI.saveRouteTemplate(templateProcessList);
+          const rtResult = await RouteTemplatesAPI.saveRouteTemplate(templateProcessList, result.orderId);
           if (!rtResult.ok) {
             console.warn('[OrderCreate] Route template save failed:', rtResult.error);
           }

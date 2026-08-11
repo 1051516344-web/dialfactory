@@ -1,6 +1,7 @@
 /* ============================================================
    DialFactory V1 · Route Templates Page
-   Phase 4: Simple view to list collected route templates.
+   Phase 4: View collected route templates with signatures.
+   Deduplication: same route_signature → count++.
    ============================================================ */
 
 const RouteTemplatesPage = (() => {
@@ -69,6 +70,9 @@ const RouteTemplatesPage = (() => {
   function renderTable(templates) {
     const rows = templates.map(t => {
       const tplId = t.id.replace(/-/g, '').slice(0, 8);
+      const orderCount = (t.associated_orders || []).length;
+      const signature = t.route_signature || '—';
+
       const processItems = (t.process_list || []).map((p, i) => `
         <span class="tpl-step">
           <span class="tpl-step-order">${p.order || i + 1}</span>
@@ -81,8 +85,8 @@ const RouteTemplatesPage = (() => {
         <div class="tpl-row">
           <div class="tpl-row-main">
             <div class="tpl-col-name">
-              <span class="tpl-name">${escapeHTML(t.template_name)}</span>
-              <span class="tpl-badge">${t.process_count}道工序</span>
+              <span class="tpl-signature" title="${escapeHTML(signature)}">${escapeHTML(signature)}</span>
+              ${orderCount > 0 ? `<span class="tpl-order-count">${orderCount} 个订单</span>` : ''}
             </div>
             <div class="tpl-col-count">
               <span class="tpl-used-count">${t.used_count}</span>

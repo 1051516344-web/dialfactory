@@ -11,7 +11,7 @@ const DashboardPage = (() => {
     if (!container) return;
 
     container.innerHTML = `
-      <div class="page-header"><h1>生产驾驶舱</h1></div>
+      <div class="page-header"><h1>生产明细</h1></div>
       ${Skeleton.cards(4)}
     `;
 
@@ -23,7 +23,7 @@ const DashboardPage = (() => {
 
     if (!overviewResult.ok) {
       container.innerHTML = `
-        <div class="page-header"><h1>生产驾驶舱</h1></div>
+        <div class="page-header"><h1>生产明细</h1></div>
         <div class="card" style="text-align:center;padding:var(--space-xl);">
           <p style="font-size:2rem;">⚠️</p>
           <p style="color:var(--color-danger);">加载失败</p>
@@ -44,7 +44,7 @@ const DashboardPage = (() => {
 
     container.innerHTML = `
       <div class="page-header">
-        <h1>生产驾驶舱</h1>
+        <h1>生产明细</h1>
         <a href="#/orders/new" class="btn btn-primary">+ 新建订单</a>
       </div>
 
