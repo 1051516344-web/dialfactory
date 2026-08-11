@@ -27,9 +27,9 @@ const DB = (() => {
    */
   async function call(promise) {
     try {
-      const { data, error } = await promise;
+      const { data, error, count } = await promise;
       if (error) throw error;
-      return { ok: true, data };
+      return { ok: true, data, count };
     } catch (err) {
       console.error('[DB]', err.message || err);
       return { ok: false, error: err.message || 'Unknown error' };

@@ -14,7 +14,7 @@ const ProcessesAPI = (() => {
     // Fetch routes
     const { ok, data: routes, error } = await DB.call(
       db.from('process_routes')
-        .select('*')
+        .select('id,name,is_active,created_at')
         .eq('is_active', true)
         .order('created_at', { ascending: false })
     );

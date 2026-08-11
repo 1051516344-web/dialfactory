@@ -1,212 +1,239 @@
 /* ============================================================
-   DialFactory V1 · P1 Dashboard Page
-   CONSTRAINT D-2-002: All queries through API layer
-   CONSTRAINT D-2-004: Centralized data loading via Promise.all
+   DialFactory V1 · Production Dashboard (Phase 3-E)
+   Industrial cockpit — 4 sections: KPI → Orders Table → Process Load → Activity
+   Data via ProductionRecordsAPI.getProductionOverview()
    ============================================================ */
 
 const DashboardPage = (() => {
-
-  let deptMap = {}; // id → name cache
 
   async function render() {
     const container = document.getElementById('page-container');
     if (!container) return;
 
-    // Loading
     container.innerHTML = `
-      <div class="page-header"><h1>DialFactory</h1></div>
+      <div class="page-header"><h1>生产驾驶舱</h1></div>
       ${Skeleton.cards(4)}
     `;
 
-    // Load dept map first
-    await loadDeptMap();
-
-    // Centralized data fetch — CONSTRAINT D-2-004
-    const [ordersResult, activeNodesResult] = await Promise.all([
-      OrdersAPI.list({ pageSize: 1000 }), // get all for dashboard aggregation
-      DB.call(
-        DB.get().from('order_nodes')
-          .select('order_id, dept_id, dept_name, status, updated_at, process_name, seq')
-          .eq('status', 'active')
-          .order('seq', { ascending: true })
-      )
+    // Fetch overview + customer names in parallel
+    const [overviewResult, custResult] = await Promise.all([
+      ProductionRecordsAPI.getProductionOverview(),
+      CustomersAPI.list()
     ]);
 
-    if (!ordersResult.ok) {
+    if (!overviewResult.ok) {
       container.innerHTML = `
-        <div class="page-header"><h1>DialFactory</h1></div>
+        <div class="page-header"><h1>生产驾驶舱</h1></div>
         <div class="card" style="text-align:center;padding:var(--space-xl);">
           <p style="font-size:2rem;">⚠️</p>
           <p style="color:var(--color-danger);">加载失败</p>
+          <p style="font-size:var(--font-size-sm);color:var(--text-secondary);">${escapeHTML(String(overviewResult.error || ''))}</p>
           <button class="btn btn-primary" style="margin-top:var(--space-md);" onclick="DashboardPage.render()">重试</button>
         </div>
       `;
       return;
     }
 
-    const orders = ordersResult.data || [];
-    const activeNodes = (activeNodesResult.ok ? activeNodesResult.data : []) || [];
+    // Build customer lookup map
+    const customerMap = {};
+    if (custResult.ok && custResult.data) {
+      custResult.data.forEach(c => { customerMap[c.id] = c.short_name || c.name; });
+    }
 
-    // Compute stats
-    const stats = computeStats(orders);
-    const stalledItems = computeStalled(activeNodes);
-    const dueItems = computeDueSoon(orders);
-    const deptCounts = computeDeptQueue(activeNodes);
+    const d = overviewResult.data;
 
-    // Render
     container.innerHTML = `
       <div class="page-header">
-        <h1>DialFactory</h1>
+        <h1>生产驾驶舱</h1>
         <a href="#/orders/new" class="btn btn-primary">+ 新建订单</a>
       </div>
 
-      <div class="stats-grid">
-        <div class="card stats-card stats-active" onclick="Router.navigate('/orders')">
-          <div class="stats-value">${stats.inProduction}</div>
-          <div class="stats-label">生产中</div>
-        </div>
-        <div class="card stats-card stats-paused" onclick="Router.navigate('/orders')">
-          <div class="stats-value">${stats.paused}</div>
-          <div class="stats-label">已暂停</div>
-        </div>
-        <div class="card stats-card stats-done" onclick="Router.navigate('/orders')">
-          <div class="stats-value">${stats.completed}</div>
-          <div class="stats-label">已完成</div>
-        </div>
-        <div class="card stats-card" style="border-top:3px solid #9CA3AF;" onclick="Router.navigate('/orders')">
-          <div class="stats-value" style="color:#9CA3AF;">${stats.cancelled}</div>
-          <div class="stats-label">已取消</div>
-        </div>
-      </div>
-
-      ${renderStalledSection(stalledItems, orders)}
-      ${renderDueSection(dueItems, orders)}
-      ${renderDeptSection(deptCounts)}
+      ${renderKPIOverview(d)}
+      ${renderCurrentOrders(d.currentProduction, customerMap)}
+      ${renderProcessDistribution(d.activeProcesses)}
+      ${renderRecentActivity(d.recentActivity)}
     `;
   }
 
-  function computeStats(orders) {
-    let inProduction = 0, paused = 0, completed = 0, cancelled = 0;
-    for (const o of orders) {
-      if (o.status === 'in_production') inProduction++;
-      else if (o.status === 'paused') paused++;
-      else if (o.status === 'completed') completed++;
-      else if (o.status === 'cancelled') cancelled++;
-    }
-    return { inProduction, paused, completed, cancelled };
+  // ==========================================================
+  // Section 1 — KPI Overview
+  // ==========================================================
+  function renderKPIOverview(d) {
+    return `
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">生产中订单</div>
+          <div class="kpi-value" style="color:#2563EB;">${d.totalRunningOrders}</div>
+          <div class="kpi-subtitle">当前运行中</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">已完成订单</div>
+          <div class="kpi-value" style="color:#16A34A;">${d.todayCompleted}</div>
+          <div class="kpi-subtitle">今日完成</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">待处理订单</div>
+          <div class="kpi-value" style="color:#EA580C;">${d.pendingOrders}</div>
+          <div class="kpi-subtitle">等待录入工序</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">当前生产工序数</div>
+          <div class="kpi-value" style="color:#0F172A;">${d.todayActiveProcesses}</div>
+          <div class="kpi-subtitle">活跃工序类型</div>
+        </div>
+      </div>
+    `;
   }
 
-  function computeStalled(activeNodes) {
-    const now = Date.now();
-    const stalled = [];
-    const seen = new Set();
-    for (const n of activeNodes) {
-      if (seen.has(n.order_id)) continue;
-      const days = Math.floor((now - new Date(n.updated_at).getTime()) / (1000 * 60 * 60 * 24));
-      if (days >= CONFIG.STALL_DAYS) {
-        stalled.push({ ...n, stalledDays: days });
-        seen.add(n.order_id);
-      }
-    }
-    return stalled.sort((a, b) => b.stalledDays - a.stalledDays);
-  }
-
-  function computeDueSoon(orders) {
-    const now = new Date();
-    return orders
-      .filter(o => {
-        if (o.status === 'completed') return false;
-        const diff = Math.ceil((new Date(o.due_date) - now) / (1000 * 60 * 60 * 24));
-        return diff >= 0 && diff <= 3;
-      })
-      .sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
-  }
-
-  function computeDeptQueue(activeNodes) {
-    const counts = {};
-    for (const n of activeNodes) {
-      const name = n.dept_name || deptMap[n.dept_id] || '—';
-      counts[name] = (counts[name] || 0) + 1;
-    }
-    return counts;
-  }
-
-  function renderStalledSection(items, orders) {
-    if (items.length === 0) {
+  // ==========================================================
+  // Section 2 — Current Production Orders Table
+  // ==========================================================
+  function renderCurrentOrders(orders, customerMap) {
+    if (!orders || orders.length === 0) {
       return `
-        <div class="section-title">⚠️ 卡顿订单</div>
-        ${EmptyState.render({ icon: '✅', title: '无卡顿订单', desc: '所有进行中的订单都在正常流转。' })}
+        <div class="section-title">当前生产状态</div>
+        ${EmptyState.render({ icon: '📋', title: '无生产中的订单', desc: '当前没有正在生产的订单。' })}
       `;
     }
-    const orderMap = {};
-    orders.forEach(o => { orderMap[o.id] = o; });
 
-    const chips = items.map(item => {
-      const order = orderMap[item.order_id];
-      const orderNo = order ? order.order_no : item.order_id.slice(0, 8);
+    const rows = orders.map(o => {
+      const specText = [o.base_texture, o.plate_color, o.specs?.base_plate_color].filter(Boolean).join('+') || '—';
+      const custName = customerMap[o.customer_id] || '—';
       return `
-        <div class="card order-card" onclick="Router.navigate('/orders/${item.order_id}')" style="cursor:pointer;">
-          <div class="order-card-warning stalled">
-            ⚠ #${escapeHTML(orderNo)} · ${escapeHTML(item.dept_name || '—')}${escapeHTML(item.process_name || '')} · ${Format.stalledSince(item.updated_at)}
+        <tr class="prod-table-row" onclick="Router.navigate('/orders/${o.order_id}')">
+          <td class="prod-table-cell prod-table-order-no">#${escapeHTML(o.order_no)}</td>
+          <td class="prod-table-cell prod-table-customer">${escapeHTML(custName)}</td>
+          <td class="prod-table-cell prod-table-product">${escapeHTML(specText)}</td>
+          <td class="prod-table-cell prod-table-process">${escapeHTML(o.process_name)}</td>
+          <td class="prod-table-cell prod-table-status">${StatusBadge.render(o.status)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="section-title section-collapse" onclick="DashboardPage.toggleSection('current-orders')">
+        <span>当前生产状态 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(${orders.length})</span></span>
+        <span class="collapse-arrow collapse-arrow-open" id="arrow-current-orders">▼</span>
+      </div>
+      <div class="card collapse-body" style="padding:0;overflow:hidden;" id="body-current-orders">
+        <table class="prod-table">
+          <thead>
+            <tr>
+              <th class="prod-table-th">订单号</th>
+              <th class="prod-table-th">客户</th>
+              <th class="prod-table-th">产品</th>
+              <th class="prod-table-th">当前工序</th>
+              <th class="prod-table-th">状态</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // ==========================================================
+  // Section 3 — Process Load Distribution
+  // ==========================================================
+  function renderProcessDistribution(dist) {
+    const entries = Object.entries(dist || {});
+    if (entries.length === 0) {
+      return `
+        <div class="section-title">工序负载分布</div>
+        ${EmptyState.render({ icon: '📊', title: '无活跃工序', desc: '当前没有正在进行的生产工序。' })}
+      `;
+    }
+
+    entries.sort((a, b) => b[1] - a[1]);
+    const maxCount = Math.max(...entries.map(([, c]) => c), 1);
+
+    const bars = entries.map(([name, count]) => {
+      const barPct = Math.round((count / maxCount) * 100);
+      return `
+        <div class="process-dist-row" onclick="Router.navigate('/orders?process=${encodeURIComponent(name)}')" style="cursor:pointer;">
+          <span class="process-dist-name">${escapeHTML(name)}</span>
+          <div class="process-dist-bar-track">
+            <div class="process-dist-bar-fill" style="width:${barPct}%;"></div>
           </div>
+          <span class="process-dist-count">${count}</span>
         </div>
       `;
     }).join('');
 
     return `
-      <div class="section-title">⚠️ 卡顿订单 (${items.length})</div>
-      ${chips}
+      <div class="section-title section-collapse" onclick="DashboardPage.toggleSection('process-dist')">
+        <span>工序负载分布 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(${entries.length})</span></span>
+        <span class="collapse-arrow collapse-arrow-open" id="arrow-process-dist">▼</span>
+      </div>
+      <div class="card collapse-body" id="body-process-dist">
+        <div class="process-dist-list">${bars}</div>
+      </div>
     `;
   }
 
-  function renderDueSection(items, orders) {
-    if (items.length === 0) {
+  // ==========================================================
+  // Section 4 — Recent Activity Feed
+  // ==========================================================
+  function renderRecentActivity(activities) {
+    if (!activities || activities.length === 0) {
       return `
-        <div class="section-title">⏰ 交期预警</div>
-        ${EmptyState.render({ icon: '✅', title: '无交期预警', desc: '未来3天内无到期订单。' })}
+        <div class="section-title">最近生产动态</div>
+        ${EmptyState.render({ icon: '📭', title: '暂无动态', desc: '生产活动将显示在这里。' })}
       `;
     }
 
-    const chips = items.map(o => `
-      <div class="card order-card" onclick="Router.navigate('/orders/${o.id}')" style="cursor:pointer;">
-        <div class="order-card-warning due-soon">
-          ⏰ #${escapeHTML(o.order_no)} · ${Format.date(o.due_date)} · ${Format.dueDays(o.due_date)}
-        </div>
-      </div>
-    `).join('');
-
-    return `
-      <div class="section-title">⏰ 交期预警 (${items.length})</div>
-      ${chips}
-    `;
-  }
-
-  function renderDeptSection(counts) {
-    const deptNames = ['制一', '制二', '制三', '制四', '总QC'];
-    const cells = deptNames.map(name => {
-      const count = counts[name] || 0;
+    const items = activities.map(a => {
+      const time = formatTime(a.created_at);
+      const orderNo = a.order?.order_no || a.order_id.slice(0, 8);
+      let actionLabel;
+      if (a.status === '生产中') {
+        actionLabel = '开始';
+      } else if (a.status === '已完成') {
+        actionLabel = '完成';
+      } else {
+        actionLabel = a.status;
+      }
       return `
-        <div class="card dept-queue-card" onclick="Router.navigate('/orders')">
-          <div class="dept-queue-name">${name}</div>
-          <div class="dept-queue-count">${count}</div>
+        <div class="activity-row">
+          <span class="activity-time">${time}</span>
+          <a href="#/orders/${a.order_id}" class="activity-order">#${escapeHTML(orderNo)}</a>
+          <span class="activity-action">${actionLabel}${escapeHTML(a.process_name)}</span>
         </div>
       `;
     }).join('');
 
     return `
-      <div class="section-title">部门待办</div>
-      <div class="dept-grid">
-        ${cells}
+      <div class="section-title section-collapse" onclick="DashboardPage.toggleSection('recent-activity')">
+        <span>最近生产动态 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(${activities.length})</span></span>
+        <span class="collapse-arrow collapse-arrow-open" id="arrow-recent-activity">▼</span>
+      </div>
+      <div class="card collapse-body" style="padding:0;" id="body-recent-activity">
+        ${items}
       </div>
     `;
   }
 
-  async function loadDeptMap() {
-    if (Object.keys(deptMap).length > 0) return;
-    const { ok, data } = await DB.call(DB.get().from('departments').select('id, name'));
-    if (ok && data) {
-      data.forEach(d => { deptMap[d.id] = d.name; });
+  // ==========================================================
+  // Helpers
+  // ==========================================================
+  function formatTime(isoStr) {
+    if (!isoStr) return '—';
+    const d = new Date(isoStr);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     }
+    return `${d.getMonth() + 1}/${d.getDate()} ${d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+  }
+
+  function toggleSection(id) {
+    const body = document.getElementById('body-' + id);
+    const arrow = document.getElementById('arrow-' + id);
+    if (!body || !arrow) return;
+    const isHidden = body.style.display === 'none';
+    body.style.display = isHidden ? '' : 'none';
+    arrow.textContent = isHidden ? '▼' : '▶';
+    arrow.className = isHidden ? 'collapse-arrow collapse-arrow-open' : 'collapse-arrow';
   }
 
   function escapeHTML(str) {
@@ -216,5 +243,5 @@ const DashboardPage = (() => {
     return div.innerHTML;
   }
 
-  return { render };
+  return { render, toggleSection };
 })();

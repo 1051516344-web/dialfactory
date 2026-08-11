@@ -14,6 +14,14 @@ const CONFIG = {
   // Department order (for cross-dept flow)
   DEPT_ORDER: ['制一', '制二', '制三', '制四', '总QC'],
 
+  // Phase 4: Process configuration for production tracking
+  // These process_names are used to group production status on the dashboard.
+  // Add/remove entries here to change the process list — no code changes needed.
+  PROCESS_CONFIG: ['开模', '冲板', '切窗', '磨板', '刷纹', '喷砂', '电镀', '喷漆', '网印', '装钉'],
+
+  // Phase 4: Alert when production stays at one process > 24h
+  PROD_STALL_HOURS: 24,
+
   // Pagination
   PAGE_SIZE: 20,
 
@@ -25,6 +33,11 @@ const CONFIG = {
     paused:         '已暂停',
     in_production:  '生产中',
     completed:      '已完成',
+    // Phase 4: Production record statuses
+    '待生产': '待生产',
+    '生产中': '生产中',
+    '已完成': '已完成',
+    '未录入': '未录入',
   },
 
   // Status Colors
@@ -35,6 +48,11 @@ const CONFIG = {
     paused:         { bg: '#FEF3C7', text: '#B45309' },
     in_production:  { bg: '#DBEAFE', text: '#1D4ED8' },
     completed:      { bg: '#D1FAE5', text: '#047857' },
+    // Phase 4: Production record status colors
+    '待生产': { bg: '#F3F4F6', text: '#9CA3AF' },
+    '生产中': { bg: '#DBEAFE', text: '#1D4ED8' },
+    '已完成': { bg: '#D1FAE5', text: '#047857' },
+    '未录入': { bg: '#F3F4F6', text: '#9CA3AF' },
   },
 
   // Rework Colors
@@ -58,7 +76,6 @@ const CONFIG = {
     { value: 'other',             label: '其他' },
   ],
 
-  // Texture / Sand options
-  BASE_TEXTURES: ['无底纹', '太阳纹', 'CD纹'],
-  SAND_TYPES: ['-', '重砂', '轻砂', '中砂'],
+  // Texture suggestions (datalist, not enum)
+  TEXTURE_SUGGESTIONS: ['无底纹', '太阳纹', '直线纹'],
 };

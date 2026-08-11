@@ -41,6 +41,11 @@ const OrderCreate = (() => {
     };
 
     // 4. Build order data
+    // FIX #1: Generate production_no + capture customer_order_no in specs
+    const now = new Date();
+    const ts = now.toISOString().replace(/[-:T]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+    const productionNo = `DF${ts}`;
+
     const orderData = {
       order_no:      formData.order_no,
       customer_id:   formData.customer_id || null,
@@ -48,7 +53,11 @@ const OrderCreate = (() => {
       due_date:      formData.due_date,
       base_texture:  formData.base_texture || null,
       plate_color:   formData.plate_color || null,
-      sand_type:     formData.sand_type || null,
+      specs:         {
+        base_plate_color: formData.base_plate_color || null,
+        customer_order_no: formData.customer_order_no || null,
+        production_no: productionNo
+      },
       route_id:      formData.route_id || null,
       route_snapshot: snapshot,
       status:        'in_production',

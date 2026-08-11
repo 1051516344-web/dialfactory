@@ -26,8 +26,10 @@ const OrdersAPI = (() => {
     }
 
     // Build query
+    // P0-FIX: Explicit columns — exclude large route_snapshot JSONB
+    const ORDER_LIST_COLS = 'id,order_no,customer_id,order_qty,due_date,base_texture,plate_color,specs,status,note,created_at,updated_at';
     let query = db.from('orders')
-      .select('*, customer:customers(name, short_name)', { count: 'exact' });
+      .select(`${ORDER_LIST_COLS}, customer:customers(name, short_name)`, { count: 'exact' });
 
     if (status)   query = query.eq('status', status);
     if (customerId) query = query.eq('customer_id', customerId);
@@ -49,13 +51,13 @@ const OrdersAPI = (() => {
     const [orderResult, nodesResult] = await Promise.all([
       DB.call(
         db.from('orders')
-          .select('*, customer:customers(name, short_name)')
+          .select('id,order_no,customer_id,order_qty,due_date,base_texture,plate_color,specs,route_snapshot,status,note,created_at,updated_at, customer:customers(name, short_name)')
           .eq('id', orderId)
           .single()
       ),
       DB.call(
         db.from('order_nodes')
-          .select('*')
+          .select('id,order_id,process_id,process_name,process_code,dept_id,dept_name,seq,rework_pass,status,pause_reason,qty_out,note,created_at,updated_at')
           .eq('order_id', orderId)
           .order('seq', { ascending: true })
       )

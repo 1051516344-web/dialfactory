@@ -31,7 +31,8 @@ const Toast = (() => {
 
   function success(msg) { show(msg, 'success', 2500); }
   function error(msg)   { show(msg, 'error',   4000); }
+  function warning(msg) { show(msg, 'warning', 5000); }
   function info(msg)    { show(msg, 'info',    3000); }
 
-  return { show, success, error, info };
+  return { show, success, error, warning, info };
 })();

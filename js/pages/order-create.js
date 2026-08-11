@@ -15,6 +15,7 @@ const OrderCreatePage = (() => {
     formData = {};
     processList = [];
     selectedMap = {};
+    drawingFile = null;
 
     const container = document.getElementById('page-container');
     if (!container) return;
@@ -26,14 +27,17 @@ const OrderCreatePage = (() => {
     const customers = custResult.ok ? custResult.data : [];
     processList = procResult.ok ? procResult.data : [];
 
-    // Pre-load dept names
+    // P1-FIX: Batch department names — single query instead of sequential for-loop
     if (processList.length > 0) {
       const deptIds = [...new Set(processList.map(p => p.default_dept_id).filter(Boolean))];
       if (deptIds.length > 0) {
-        for (const did of deptIds) {
-          if (!deptCache[did]) {
-            const { ok, data } = await DB.call(DB.get().from('departments').select('name').eq('id', did).single());
-            if (ok && data) deptCache[did] = data.name;
+        const missingIds = deptIds.filter(did => !deptCache[did]);
+        if (missingIds.length > 0) {
+          const { ok, data } = await DB.call(
+            DB.get().from('departments').select('id, name').in('id', missingIds)
+          );
+          if (ok && data) {
+            data.forEach(d => { deptCache[d.id] = d.name; });
           }
         }
       }
@@ -43,6 +47,7 @@ const OrderCreatePage = (() => {
   }
 
   let deptCache = {};
+  let drawingFile = null;  // File object for optional drawing upload
 
   // ==========================================================
   // Step 1: Basic Info
@@ -52,8 +57,7 @@ const OrderCreatePage = (() => {
       ? customers.map(c => `<option value="${c.id}">${escapeHTML(c.short_name || c.name)}</option>`).join('')
       : '<option value="">— 暂无客户数据，可手动输入 —</option>';
 
-    const texOptions = CONFIG.BASE_TEXTURES.map(t => `<option value="${t}">${t}</option>`).join('');
-    const sandOptions = CONFIG.SAND_TYPES.map(t => `<option value="${t}">${t}</option>`).join('');
+    const texSuggestions = CONFIG.TEXTURE_SUGGESTIONS.map(t => `<option value="${t}">`).join('');
 
     container.innerHTML = `
       <div class="page-header">
@@ -65,6 +69,11 @@ const OrderCreatePage = (() => {
         <div class="form-group">
           <label class="form-label">订单编号 *</label>
           <input type="text" id="form-order-no" class="form-input" placeholder="如 CUST-2026-0088" value="${escapeHTML(formData.order_no || '')}">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">客户订单号 <span style="color:var(--text-secondary);font-weight:400;">（选填）</span></label>
+          <input type="text" id="form-customer-order-no" class="form-input" placeholder="客户方的采购单号/参考号" value="${escapeHTML(formData.customer_order_no || '')}">
         </div>
 
         <div class="form-group">
@@ -88,15 +97,27 @@ const OrderCreatePage = (() => {
 
         <div class="form-group">
           <label class="form-label">底质纹理</label>
-          <select id="form-texture" class="form-select"><option value="">—</option>${texOptions}</select>
+          <input type="text" id="form-texture" class="form-input" list="texture-suggestions"
+                 placeholder="如 太阳纹、直线纹" value="${escapeHTML(formData.base_texture || '')}">
+          <datalist id="texture-suggestions">${texSuggestions}</datalist>
         </div>
         <div class="form-group">
           <label class="form-label">电镀颜色</label>
           <input type="text" id="form-color" class="form-input" placeholder="如 银白60s" value="${escapeHTML(formData.plate_color || '')}">
         </div>
         <div class="form-group">
-          <label class="form-label">喷砂类型</label>
-          <select id="form-sand" class="form-select"><option value="">—</option>${sandOptions}</select>
+          <label class="form-label">板底颜色</label>
+          <input type="text" id="form-base-plate-color" class="form-input" placeholder="如 黑色喷漆、白底" value="${escapeHTML(formData.base_plate_color || '')}">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">客户图纸 <span style="color:var(--text-secondary);font-weight:400;">（选填）</span></label>
+          <input type="file" id="form-drawing" class="form-input"
+                 accept=".pdf,.png,.jpg,.jpeg"
+                 onchange="OrderCreatePage.onDrawingSelected(this)"
+                 style="padding:6px;">
+          ${drawingFile ? `<div style="font-size:var(--font-size-sm);color:var(--text-secondary);margin-top:2px;">已选择: ${escapeHTML(drawingFile.name)} (${(drawingFile.size / 1024).toFixed(0)} KB)</div>` : ''}
+          <div style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">支持 PDF / PNG / JPEG，最大 10 MB</div>
         </div>
 
         <div class="form-group">
@@ -119,14 +140,21 @@ const OrderCreatePage = (() => {
   async function goToStep2() {
     const container = document.getElementById('page-container');
     formData.order_no    = document.getElementById('form-order-no')?.value || '';
+    formData.customer_order_no = document.getElementById('form-customer-order-no')?.value || '';
     formData.order_qty   = document.getElementById('form-qty')?.value || '';
     formData.due_date    = document.getElementById('form-due')?.value || '';
     formData.base_texture = document.getElementById('form-texture')?.value || '';
     formData.plate_color = document.getElementById('form-color')?.value || '';
-    formData.sand_type   = document.getElementById('form-sand')?.value || '';
+    formData.base_plate_color = document.getElementById('form-base-plate-color')?.value || '';
     formData.note        = document.getElementById('form-note')?.value || '';
     formData.route_id    = null;
     formData.source      = 'manual';
+
+    // Capture drawing file (File object can't survive DOM re-render)
+    const drawingInput = document.getElementById('form-drawing');
+    if (drawingInput && drawingInput.files && drawingInput.files.length > 0) {
+      drawingFile = drawingInput.files[0];
+    }
 
     const custSelect = document.getElementById('form-customer');
     if (custSelect) {
@@ -249,6 +277,22 @@ const OrderCreatePage = (() => {
     render();
   }
 
+  function onDrawingSelected(input) {
+    if (input.files && input.files.length > 0) {
+      const file = input.files[0];
+      const v = StorageAPI.validateFile(file);
+      if (!v.valid) {
+        Toast.warning(v.error);
+        input.value = '';
+        drawingFile = null;
+        return;
+      }
+      drawingFile = file;
+    } else {
+      drawingFile = null;
+    }
+  }
+
   // ==========================================================
   // Submit
   // ==========================================================
@@ -270,6 +314,47 @@ const OrderCreatePage = (() => {
     const result = await OrderCreate.submit(formData, selectedSteps);
 
     if (result.ok) {
+      // Upload drawing if selected (optional — failure does not block order creation)
+      if (drawingFile) {
+        const uploadResult = await StorageAPI.uploadDrawing(result.orderId, drawingFile);
+        if (!uploadResult.ok) {
+          Toast.warning('订单已创建，但图纸上传失败：' + uploadResult.error);
+        } else if (uploadResult.warning) {
+          Toast.warning(uploadResult.warning);
+        }
+        drawingFile = null;
+      }
+
+      // Phase 4: Auto-create production records for selected processes
+      const selectedNames = selectedSteps
+        .filter(s => s.selected)
+        .map(s => s.process_name);
+      if (selectedNames.length > 0) {
+        const prResult = await ProductionRecordsAPI.createForOrder(result.orderId, selectedNames);
+        if (!prResult.ok) {
+          console.warn('[OrderCreate] Production records creation failed:', prResult.error);
+        }
+      }
+
+      // Phase 4: Auto-save route template (non-blocking — failure does not affect order creation)
+      try {
+        const templateProcessList = selectedSteps
+          .filter(s => s.selected)
+          .map((s, i) => ({
+            order: i + 1,
+            process: s.process_name,
+            department: s.dept_name
+          }));
+        if (templateProcessList.length > 0) {
+          const rtResult = await RouteTemplatesAPI.saveRouteTemplate(templateProcessList);
+          if (!rtResult.ok) {
+            console.warn('[OrderCreate] Route template save failed:', rtResult.error);
+          }
+        }
+      } catch (e) {
+        console.warn('[OrderCreate] Route template save error:', e);
+      }
+
       Router.navigate('/orders/' + result.orderId);
     } else {
       if (btn) { btn.disabled = false; btn.textContent = '创建订单 ✓'; }
@@ -284,5 +369,5 @@ const OrderCreatePage = (() => {
     return div.innerHTML;
   }
 
-  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder };
+  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onDrawingSelected };
 })();

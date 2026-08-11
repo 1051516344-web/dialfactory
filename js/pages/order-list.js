@@ -6,17 +6,30 @@
 
 const OrderListPage = (() => {
 
-  let currentFilters = { status: '', customerId: '', search: '', deptId: '' };
+  let currentFilters = { status: '', customerId: '', search: '', deptId: '', process: '' };
   let currentPage = 0;
   let allOrders = [];
 
   async function render(filters = {}) {
-    Object.assign(currentFilters, filters);
+    // Phase 4: Parse URL query from hash (e.g. #/orders?process=冲板)
+    const hash = window.location.hash.slice(1); // /orders?process=冲板
+    const urlQuery = {};
+    const qIdx = hash.indexOf('?');
+    if (qIdx >= 0) {
+      hash.slice(qIdx + 1).split('&').forEach(pair => {
+        const [k, v] = pair.split('=');
+        if (k) urlQuery[decodeURIComponent(k)] = decodeURIComponent(v || '');
+      });
+    }
+    Object.assign(currentFilters, urlQuery, filters);
     currentPage = 0;
     allOrders = [];
 
     const container = document.getElementById('page-container');
     if (!container) return;
+
+    // P1-FIX: Preload dept cache before renderFilterBar() to prevent 5x duplicate queries
+    ensureDeptCache();
 
     // Loading
     container.innerHTML = `
@@ -28,10 +41,11 @@ const OrderListPage = (() => {
       ${Skeleton.cards(5)}
     `;
 
-    // Fetch filters data + orders in parallel
+    // Await dept cache + fetch filters data + orders in parallel
     const [custResult, ordersResult] = await Promise.all([
       CustomersAPI.list(),
-      OrdersAPI.list({ ...currentFilters, page: 0 })
+      OrdersAPI.list({ ...currentFilters, page: 0 }),
+      deptCachePromise || Promise.resolve()
     ]);
 
     if (!ordersResult.ok) {
@@ -48,7 +62,19 @@ const OrderListPage = (() => {
     }
 
     const customers = custResult.ok ? custResult.data : [];
-    const orders = ordersResult.data || [];
+    let orders = ordersResult.data || [];
+
+    // Phase 4: Process filter — query production_records for matching orders
+    if (currentFilters.process) {
+      const { ok: prOk, data: prData } = await ProductionRecordsAPI.listActive();
+      if (prOk && prData) {
+        const matchingOrderIds = new Set(
+          prData.filter(r => r.process_name === currentFilters.process).map(r => r.order_id)
+        );
+        orders = orders.filter(o => matchingOrderIds.has(o.id));
+      }
+    }
+
     allOrders = orders;
 
     // Batch fetch node stats
@@ -104,13 +130,25 @@ const OrderListPage = (() => {
 
   // Dept name → ID cache
   let deptCache = null;
+  let deptCachePromise = null;
+
+  /** P1-FIX: Preload dept cache once — prevents 5x duplicate query race */
+  function ensureDeptCache() {
+    if (deptCache) return;
+    if (!deptCachePromise) {
+      deptCachePromise = DB.call(DB.get().from('departments').select('id, name')).then(({ ok, data }) => {
+        if (ok) {
+          deptCache = {};
+          data.forEach(d => { deptCache[d.name] = d.id; });
+        }
+      });
+    }
+  }
+
   async function getDeptId(name) {
     if (!deptCache) {
-      const { ok, data } = await DB.call(DB.get().from('departments').select('id, name'));
-      if (ok) {
-        deptCache = {};
-        data.forEach(d => { deptCache[d.name] = d.id; });
-      }
+      await ensureDeptCache();
+      await deptCachePromise; // ensure resolved
     }
     return deptCache ? (deptCache[name] || '') : '';
   }
@@ -167,6 +205,7 @@ const OrderListPage = (() => {
         <a href="#/orders/new" class="btn btn-primary">+ 新建订单</a>
       </div>
       ${renderFilterBar()}
+      ${currentFilters.process ? `<div style="padding:var(--space-sm) var(--space-md);background:var(--bg-muted);border-radius:var(--radius-sm);margin-bottom:var(--space-md);font-size:var(--font-size-sm);display:flex;align-items:center;gap:var(--space-sm);"><span style="color:var(--text-secondary);">工序筛选:</span><strong>${escapeHTML(currentFilters.process)}</strong><a href="#/orders" style="color:var(--color-primary);margin-left:auto;text-decoration:none;">清除</a></div>` : ''}
       <div class="order-list-count">共 ${totalCount || orders.length} 条订单</div>
       ${cardsHtml}
       ${hasMore ? `<div style="text-align:center;margin-top:var(--space-md);">
@@ -177,7 +216,9 @@ const OrderListPage = (() => {
 
   function renderOrderCard(order) {
     const s = order.stats || {};
-    const specText = [order.base_texture, order.plate_color].filter(Boolean).join('+') || '—';
+    const specText = [order.base_texture, order.plate_color, order.specs?.base_plate_color].filter(Boolean).join('+') || '—';
+    const prodNo = order.specs?.production_no || '';
+    const custOrderNo = order.specs?.customer_order_no || '';
     const warningHtml = s.isStalled
       ? `<div class="order-card-warning stalled">⚠ ${escapeHTML(s.currentNode?.dept_name || '')}${escapeHTML(s.currentNode?.process_name || '')} · ${Format.stalledSince(s.currentNode?.updated_at)}</div>`
       : (isDueSoon(order.due_date)
@@ -198,7 +239,9 @@ const OrderListPage = (() => {
       <div class="card order-card" onclick="Router.navigate('/orders/${order.id}')">
         <div class="order-card-header">
           <span class="order-card-order-no">#${escapeHTML(order.order_no)}</span>
+          ${prodNo ? `<span style="font-size:var(--font-size-xs);color:var(--color-primary);font-weight:500;">${escapeHTML(prodNo)}</span>` : ''}
           <span class="order-card-customer">${escapeHTML(order.customer?.short_name || order.customer?.name || '—')}</span>
+          ${custOrderNo ? `<span style="font-size:var(--font-size-xs);color:var(--text-secondary);">客单: ${escapeHTML(custOrderNo)}</span>` : ''}
           ${StatusBadge.render(derivedStatus)}
         </div>
         <div class="order-card-meta">

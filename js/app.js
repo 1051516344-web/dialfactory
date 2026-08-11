@@ -25,9 +25,9 @@ const App = (() => {
       await OrderDetailPage.render(params.id);
     });
 
-    // P5 · Route List ✅ D-1
-    Router.on('/routes', async () => {
-      await RouteListPage.render();
+    // Phase 4 · Route Templates (auto-collected) — replaces manual route management
+    Router.on('/templates', async () => {
+      await RouteTemplatesPage.render();
     });
 
     // P6 · Exception List ✅ D-5

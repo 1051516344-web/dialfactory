@@ -8,7 +8,7 @@ const NavBar = (() => {
     { href: '#/',              label: '首页',   icon: '🏠' },
     { href: '#/orders',        label: '订单',   icon: '📋' },
     { href: '#/orders/new',    label: '新建',   icon: '➕' },
-    { href: '#/routes',        label: '路线',   icon: '🗺'  },
+    { href: '#/templates',     label: '模板',   icon: '📦' },
     { href: '#/exceptions',    label: '异常',   icon: '⚠'  },
   ];
 
