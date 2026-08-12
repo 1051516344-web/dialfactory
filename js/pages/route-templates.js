@@ -1,7 +1,7 @@
 /* ============================================================
    DialFactory V1 · Route Templates Page
    Phase 4: View collected route templates with signatures.
-   Deduplication: same route_signature → count++.
+   Template names are user-editable inline.
    ============================================================ */
 
 const RouteTemplatesPage = (() => {
@@ -52,26 +52,18 @@ const RouteTemplatesPage = (() => {
       </div>
     `;
 
-    // Attach expand/collapse handlers
-    container.querySelectorAll('.tpl-row-toggle').forEach(btn => {
-      btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        const id = this.dataset.id;
-        const detail = document.getElementById('tpl-detail-' + id);
-        if (detail) {
-          const isHidden = detail.style.display === 'none';
-          detail.style.display = isHidden ? 'block' : 'none';
-          this.textContent = isHidden ? '▲' : '▼';
-        }
-      });
-    });
+    attachHandlers(container);
   }
 
   function renderTable(templates) {
     const rows = templates.map(t => {
       const tplId = t.id.replace(/-/g, '').slice(0, 8);
       const orderCount = (t.associated_orders || []).length;
-      const signature = t.route_signature || '—';
+      const name = t.template_name || t.route_signature || '—';
+      const signature = t.route_signature || '';
+      const displaySig = signature.length > 40
+        ? signature.slice(0, 40) + '…'
+        : signature;
 
       const processItems = (t.process_list || []).map((p, i) => `
         <span class="tpl-step">
@@ -85,7 +77,12 @@ const RouteTemplatesPage = (() => {
         <div class="tpl-row">
           <div class="tpl-row-main">
             <div class="tpl-col-name">
-              <span class="tpl-signature" title="${escapeHTML(signature)}">${escapeHTML(signature)}</span>
+              <span class="tpl-name-display" id="tpl-name-text-${tplId}" title="点击编辑名称">${escapeHTML(name)}</span>
+              <input type="text" class="tpl-name-input" id="tpl-name-input-${tplId}"
+                     value="${escapeHTML(name)}" style="display:none;"
+                     data-id="${t.id}" data-tpl-id="${tplId}">
+              <span class="tpl-name-edit-icon" id="tpl-name-icon-${tplId}" title="编辑名称">✎</span>
+              <span class="tpl-signature" title="${escapeHTML(signature)}">${escapeHTML(displaySig)}</span>
               ${orderCount > 0 ? `<span class="tpl-order-count">${orderCount} 个订单</span>` : ''}
             </div>
             <div class="tpl-col-count">
@@ -103,6 +100,100 @@ const RouteTemplatesPage = (() => {
     }).join('');
 
     return `<div class="tpl-table">${rows}</div>`;
+  }
+
+  function attachHandlers(container) {
+    // Expand/collapse
+    container.querySelectorAll('.tpl-row-toggle').forEach(btn => {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const id = this.dataset.id;
+        const detail = document.getElementById('tpl-detail-' + id);
+        if (detail) {
+          const isHidden = detail.style.display === 'none';
+          detail.style.display = isHidden ? 'block' : 'none';
+          this.textContent = isHidden ? '▲' : '▼';
+        }
+      });
+    });
+
+    // Inline edit: click name text or edit icon to start editing
+    container.querySelectorAll('.tpl-name-display, .tpl-name-edit-icon').forEach(el => {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const tplId = this.dataset.tplId || this.id.replace('tpl-name-text-', '').replace('tpl-name-icon-', '');
+        startEdit(tplId);
+      });
+    });
+
+    // Inline edit: input keydown
+    container.querySelectorAll('.tpl-name-input').forEach(input => {
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { saveEdit(this.dataset.tplId); }
+        if (e.key === 'Escape') { cancelEdit(this.dataset.tplId); }
+      });
+      input.addEventListener('blur', function() {
+        // Small delay to allow Enter/Escape to fire first
+        setTimeout(() => {
+          if (this.style.display !== 'none') {
+            cancelEdit(this.dataset.tplId);
+          }
+        }, 150);
+      });
+    });
+  }
+
+  function startEdit(tplId) {
+    const textEl = document.getElementById('tpl-name-text-' + tplId);
+    const inputEl = document.getElementById('tpl-name-input-' + tplId);
+    const iconEl = document.getElementById('tpl-name-icon-' + tplId);
+    if (!textEl || !inputEl) return;
+
+    textEl.style.display = 'none';
+    if (iconEl) iconEl.style.display = 'none';
+    inputEl.style.display = '';
+    inputEl.focus();
+    inputEl.select();
+  }
+
+  async function saveEdit(tplId) {
+    const inputEl = document.getElementById('tpl-name-input-' + tplId);
+    const textEl = document.getElementById('tpl-name-text-' + tplId);
+    const iconEl = document.getElementById('tpl-name-icon-' + tplId);
+    if (!inputEl || !textEl) return;
+
+    const newName = inputEl.value.trim();
+    const id = inputEl.dataset.id;
+
+    if (!newName) {
+      cancelEdit(tplId);
+      return;
+    }
+
+    // Optimistic update
+    textEl.textContent = newName;
+    textEl.style.display = '';
+    inputEl.style.display = 'none';
+    if (iconEl) iconEl.style.display = '';
+
+    const result = await RouteTemplatesAPI.updateName(id, newName);
+    if (!result.ok) {
+      // Revert on failure
+      textEl.textContent = inputEl.defaultValue;
+      Toast.warning('保存失败：' + (result.error || '未知错误'));
+    }
+  }
+
+  function cancelEdit(tplId) {
+    const textEl = document.getElementById('tpl-name-text-' + tplId);
+    const inputEl = document.getElementById('tpl-name-input-' + tplId);
+    const iconEl = document.getElementById('tpl-name-icon-' + tplId);
+    if (!textEl || !inputEl) return;
+
+    inputEl.value = textEl.textContent; // reset to current
+    inputEl.style.display = 'none';
+    textEl.style.display = '';
+    if (iconEl) iconEl.style.display = '';
   }
 
   function formatDate(isoStr) {

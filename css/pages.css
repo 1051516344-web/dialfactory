@@ -663,14 +663,58 @@
   min-width: 0;
 }
 
-.tpl-signature {
+.tpl-name-display {
   font-weight: 600;
   color: #0F172A;
   font-size: var(--font-size-sm);
-  max-width: 320px;
+  cursor: text;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.15s;
+}
+
+.tpl-name-display:hover {
+  border-bottom-color: #CBD5E1;
+}
+
+.tpl-name-input {
+  font-weight: 600;
+  color: #0F172A;
+  font-size: var(--font-size-sm);
+  border: 1px solid #2563EB;
+  border-radius: 4px;
+  padding: 2px 6px;
+  max-width: 200px;
+  background: #fff;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.tpl-name-edit-icon {
+  font-size: 0.7rem;
+  color: #CBD5E1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s;
+  user-select: none;
+}
+
+.tpl-name-edit-icon:hover {
+  color: #2563EB;
+}
+
+.tpl-signature {
+  color: #94A3B8;
+  font-size: 0.75rem;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
 }
 
 .tpl-order-count {

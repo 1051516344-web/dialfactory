@@ -126,5 +126,23 @@ const RouteTemplatesAPI = (() => {
     );
   }
 
-  return { saveRouteTemplate, list, getById, buildSignature };
+  /**
+   * Update the user-editable name of a template.
+   * @param {string} id - template UUID
+   * @param {string} newName
+   * @returns { ok, data }
+   */
+  async function updateName(id, newName) {
+    if (!id || !newName || !newName.trim()) {
+      return { ok: false, error: 'Invalid id or name' };
+    }
+    return DB.call(
+      DB.get().from('process_route_templates')
+        .update({ template_name: newName.trim() })
+        .eq('id', id)
+        .select().single()
+    );
+  }
+
+  return { saveRouteTemplate, list, getById, updateName, buildSignature };
 })();
