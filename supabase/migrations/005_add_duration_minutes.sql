@@ -5,6 +5,8 @@
 -- ============================================================
 
 -- 005a: Add duration_minutes to production_records
-ALTER TABLE production_records ADD COLUMN duration_minutes INTEGER;
+ALTER TABLE production_records ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
 
 COMMENT ON COLUMN production_records.duration_minutes IS 'Auto-calculated: minutes between created_at and completed_at';
+
+NOTIFY pgrst, 'reload schema';
