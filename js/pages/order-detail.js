@@ -58,7 +58,9 @@ const OrderDetailPage = (() => {
     const order = currentOrder;
     const nodes = currentNodeList;
     const stats = OrderState.nodeStats(nodes);
-    const derivedStatus = OrderState.derive(nodes);
+    // ①: pass current order status so a cancelled order stays 'cancelled'
+    // (derive() would otherwise fall through to 'paused' since all nodes were paused)
+    const derivedStatus = OrderState.derive(nodes, order.status);
 
     const excByNode = {};
     currentExceptions.forEach(e => {
@@ -516,7 +518,7 @@ const OrderDetailPage = (() => {
   function updateStatusBadgeDOM(status) {
     const badge = document.getElementById('order-status-badge');
     if (!badge) return;
-    const derivedStatus = status || OrderState.derive(currentNodeList);
+    const derivedStatus = status || OrderState.derive(currentNodeList, currentOrder.status);
     badge.innerHTML = StatusBadge.render(derivedStatus);
   }
 
@@ -563,13 +565,21 @@ const OrderDetailPage = (() => {
       confirmLabel: '确认取消',
       dangerous: true,
       onConfirm: async () => {
-        // Set all active/waiting nodes to paused
+        // Set all active/waiting nodes to paused, checking each result (③)
+        let nodeFailures = 0;
         for (const n of currentNodeList) {
           if (n.status === 'active' || n.status === 'waiting') {
-            await OrdersAPI.updateNode(n.id, { status: 'paused', pause_reason: '订单已取消' });
+            const r = await OrdersAPI.updateNode(n.id, { status: 'paused', pause_reason: '订单已取消' });
+            if (!r.ok) nodeFailures++;
           }
         }
-        await OrdersAPI.updateStatus(currentOrder.id, 'cancelled');
+        const statusResult = await OrdersAPI.updateStatus(currentOrder.id, 'cancelled');
+        if (nodeFailures > 0 || !statusResult.ok) {
+          Toast.error(nodeFailures > 0
+            ? `取消失败：${nodeFailures} 个工序节点更新未生效`
+            : '取消失败：订单状态更新未生效');
+          return;
+        }
         currentOrder.status = 'cancelled';
         Toast.info('订单已取消');
         renderFull(document.getElementById('page-container'));

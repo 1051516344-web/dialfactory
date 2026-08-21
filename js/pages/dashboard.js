@@ -202,7 +202,7 @@ const DashboardPage = (() => {
         <div class="activity-row">
           <span class="activity-time">${time}</span>
           <a href="#/orders/${a.order_id}" class="activity-order">#${escapeHTML(orderNo)}</a>
-          <span class="activity-action">${actionLabel}${escapeHTML(a.process_name)}</span>
+          <span class="activity-action">${actionLabel} ${escapeHTML(a.process_name)}</span>
         </div>
       `;
     }).join('');
