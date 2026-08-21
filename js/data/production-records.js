@@ -20,13 +20,17 @@ const ProductionRecordsAPI = (() => {
    * Batch-create production records for all processes in an order.
    * First process gets status '生产中' with created_at=now; rest = '待生产'.
    */
-  async function createForOrder(orderId, processNames) {
+  async function createForOrder(orderId, nodes) {
     const now = new Date().toISOString();
-    const rows = processNames.map((name, i) => ({
+    // B5: link each record to its node_id (rework/append can reuse a process name).
+    // Sort by seq so the initially-active node (first) becomes '生产中'.
+    const ordered = [...nodes].sort((a, b) => (a.seq || 0) - (b.seq || 0));
+    const rows = ordered.map((node, i) => ({
       order_id: orderId,
-      process_name: name,
+      node_id: node.id || node.node_id || null,
+      process_name: node.process_name,
       status: i === 0 ? '生产中' : '待生产',
-      created_at: i === 0 ? now : null
+      created_at: now
     }));
     return DB.call(
       DB.get().from('production_records').insert(rows).select()
@@ -183,13 +187,15 @@ const ProductionRecordsAPI = (() => {
       todayCompletedResult,
       activeRecordsResult,
       nonCompletedResult,
-      recentActivityResult
+      recentActivityResult,
+      anyRecordResult,
+      cancelledResult
     ] = await Promise.all([
-      // 1. Count non-completed orders
+      // 1. Count currently-running orders (exclude paused — B19)
       DB.call(
         DB.get().from('orders')
           .select('id', { count: 'exact', head: true })
-          .or('status.is.null,status.neq.completed')
+          .eq('status', 'in_production')
       ),
       // 2. Count orders completed today
       DB.call(
@@ -201,7 +207,7 @@ const ProductionRecordsAPI = (() => {
       // 3. Active production records with order info
       DB.call(
         DB.get().from('production_records')
-          .select('id, order_id, process_name, status, created_at, order:orders(order_no, status, specs)')
+          .select('id, order_id, process_name, status, created_at, order:orders(order_no, status, specs, base_texture, plate_color)')
           .eq('status', '生产中')
           .order('created_at', { ascending: true })
       ),
@@ -218,6 +224,17 @@ const ProductionRecordsAPI = (() => {
           .select('id, order_id, process_name, status, created_at, completed_at, order:orders(order_no)')
           .order('created_at', { ascending: false })
           .limit(30)
+      ),
+      // 6. All order_ids that have ANY production record (for pending count)
+      DB.call(
+        DB.get().from('production_records')
+          .select('order_id')
+      ),
+      // 7. Count cancelled orders (#6 dashboard card)
+      DB.call(
+        DB.get().from('orders')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'cancelled')
       )
     ]);
 
@@ -226,6 +243,8 @@ const ProductionRecordsAPI = (() => {
     const activeRecords  = activeRecordsResult.ok ? (activeRecordsResult.data || []) : [];
     const nonCompleted   = nonCompletedResult.ok ? (nonCompletedResult.data || []) : [];
     const recentActivity = recentActivityResult.ok ? (recentActivityResult.data || []) : [];
+    const anyRecordOrderIds = new Set((anyRecordResult.ok ? (anyRecordResult.data || []) : []).map(r => r.order_id));
+    const cancelledOrders = cancelledResult.ok ? (cancelledResult.count || 0) : 0;
 
     // Process distribution from active records
     const processDist = {};
@@ -242,17 +261,17 @@ const ProductionRecordsAPI = (() => {
       order_no: r.order?.order_no || r.order_id.slice(0, 8),
       customer_id: r.order?.customer_id || '',
       specs: r.order?.specs || {},
-      base_texture: r.order?.specs?.base_texture || '',
-      plate_color: r.order?.specs?.plate_color || '',
+      base_texture: r.order?.base_texture || '',
+      plate_color: r.order?.plate_color || '',
       process_name: r.process_name,
       status: r.status,
       created_at: r.created_at,
       source: 'production_record'
     }));
 
-    // Step B: non-completed orders WITHOUT production records → show "未录入"
+    // Step B: non-completed orders WITHOUT any production record → show "未录入"
     for (const o of nonCompleted) {
-      if (!activeOrderIds.has(o.id)) {
+      if (!anyRecordOrderIds.has(o.id)) {
         currentProduction.push({
           order_id: o.id,
           order_no: o.order_no,
@@ -268,8 +287,8 @@ const ProductionRecordsAPI = (() => {
       }
     }
 
-    // Pending count: non-completed orders without any production record
-    const pendingCount = nonCompleted.filter(o => !activeOrderIds.has(o.id)).length;
+    // Pending count: non-completed orders without any production record (B19)
+    const pendingCount = nonCompleted.filter(o => !anyRecordOrderIds.has(o.id)).length;
 
     return {
       ok: true,
@@ -277,6 +296,7 @@ const ProductionRecordsAPI = (() => {
         totalRunningOrders: runningCount,
         todayCompleted,
         pendingOrders: pendingCount,
+        cancelledOrders,
         todayActiveProcesses: Object.keys(processDist).length,
         activeProcesses: processDist,
         currentProduction,

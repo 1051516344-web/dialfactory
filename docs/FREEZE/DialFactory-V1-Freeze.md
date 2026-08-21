@@ -12,7 +12,7 @@
 |------|-----|
 | **Project** | DialFactory |
 | **Version** | V1.0 |
-| **Phase** | Phase 1-A Schema Design |
+| **Phase** | Phase 4 · Production Tracking (Trial) |
 | **Status** | **FROZEN** |
 | **Approval** | [04-Schema-Final-Review.md](../../AI_CONTEXT/Phase1/04-Schema-Final-Review.md) |
 
@@ -58,7 +58,7 @@
 
 ## Current Schema Baseline
 
-### Tables: 8
+### Tables: 10
 
 | # | 表名 | 说明 |
 |:--|------|------|
@@ -70,6 +70,8 @@
 | 6 | `orders` | 订单 |
 | 7 | `order_nodes` | 工序执行记录（核心追踪单元） |
 | 8 | `exception_events` | 异常/质量事件 |
+| 9 | `production_records` | 生产记录（工序级时间追踪，Phase 4） |
+| 10 | `process_route_templates` | 路线模板（自动沉淀 + 签名去重，Phase 4） |
 
 ### Fields: 58
 
@@ -110,7 +112,7 @@
 | 字段 | 表 | 用途 |
 |------|-----|------|
 | `route_snapshot` | `orders` | ADL-001：路线模板确认快照，含 `confirmed` 标记 |
-| `specs` | `orders` | Phase 0-A.2 C4 预留：柔性规格参数 |
+| `specs` | `orders` | 柔性规格参数。键：`base_plate_color` / `customer_order_no` / `production_no` / `drawing_name` / `drawing_path`（C7） |
 
 ### RLS Strategy
 
@@ -176,3 +178,17 @@
 ---
 
 > **V1.0 Freeze · 2026-08-06 · Phase 1-A Closed**
+
+---
+
+## V1.1 Amendments (post-freeze, 2026-08-21)
+
+| 变更 | 说明 |
+|------|------|
+| 新增表 `production_records` | 工序级生产时间追踪（migration 003） |
+| 新增表 `process_route_templates` | 自动沉淀路线模板，签名去重（migration 004/006） |
+| 新增订单状态 `cancelled` | 订单取消（migration 007） |
+| RLS 收紧 | 由 `USING (true)` 改为 `authenticated` 角色可读写（migration 009，需登录） |
+| 约束/触发器 | 数量与时长 CHECK、`set_duration_minutes`、`set_updated_at`（migration 010） |
+| `drawings` 桶/策略 | storage bucket + 最小权限策略入迁移（migration 008） |
+| `production_records.node_id` | 关联 `order_nodes`，区分同名返工/追加节点（migration 011） |

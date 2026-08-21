@@ -49,6 +49,21 @@ const DOM = (() => {
     return container;
   }
 
+  /**
+   * HTML-escape a string for BOTH text and attribute contexts.
+   * Escapes & < > " ' — the per-page escapeHTML helpers only escaped
+   * & < > (via textContent), leaving attribute-context XSS (B15).
+   */
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   /** Show element */
   function show(el) {
     if (typeof el === 'string') el = $(el);
@@ -61,5 +76,5 @@ const DOM = (() => {
     if (el) el.style.display = 'none';
   }
 
-  return { create, $, $$, render, show, hide };
+  return { create, $, $$, render, show, hide, escapeHtml };
 })();

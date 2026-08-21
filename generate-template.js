@@ -3,6 +3,7 @@
 // 输出：DialFactory_数据采集模板.xlsx
 
 const ExcelJS = require('exceljs');
+const path = require('path');
 
 async function main() {
   const wb = new ExcelJS.Workbook();
@@ -579,7 +580,7 @@ async function main() {
   // ============================================================
   // 保存
   // ============================================================
-  const outPath = 'c:/Users/10515/Desktop/DialFactory/DialFactory_数据采集模板.xlsx';
+  const outPath = path.join(__dirname, 'DialFactory_数据采集模板.xlsx');
   await wb.xlsx.writeFile(outPath);
   console.log('✅ 模板已生成：' + outPath);
 

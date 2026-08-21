@@ -164,6 +164,7 @@ const RouteTemplatesPage = (() => {
 
     const newName = inputEl.value.trim();
     const id = inputEl.dataset.id;
+    const prevName = textEl.textContent; // B23: capture pre-edit value before optimistic update
 
     if (!newName) {
       cancelEdit(tplId);
@@ -178,8 +179,8 @@ const RouteTemplatesPage = (() => {
 
     const result = await RouteTemplatesAPI.updateName(id, newName);
     if (!result.ok) {
-      // Revert on failure
-      textEl.textContent = inputEl.defaultValue;
+      // Revert on failure — B23: revert to prevName, not stale defaultValue
+      textEl.textContent = prevName;
       Toast.warning('保存失败：' + (result.error || '未知错误'));
     }
   }
@@ -207,10 +208,7 @@ const RouteTemplatesPage = (() => {
   }
 
   function escapeHTML(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   return { render };

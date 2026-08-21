@@ -21,9 +21,16 @@ const Router = (() => {
     routes.push({ pattern, regex: new RegExp(`^${regexStr}$`), keys, handler });
   }
 
+  /** Strip query string — routes match the path segment only (B20). */
+  function cleanPath(path) {
+    const q = path.indexOf('?');
+    return q >= 0 ? path.slice(0, q) : path;
+  }
+
   function match(path) {
+    const p = cleanPath(path);
     for (const route of routes) {
-      const m = path.match(route.regex);
+      const m = p.match(route.regex);
       if (m) {
         const params = {};
         route.keys.forEach((key, i) => { params[key] = m[i + 1]; });
@@ -34,6 +41,13 @@ const Router = (() => {
   }
 
   async function navigate(path) {
+    // B20: sync the hash (preserving any query string) without a history entry,
+    // so pages like order-list can parse the query from window.location.hash.
+    const hash = '#' + path;
+    if (window.location.hash !== hash) {
+      history.replaceState(null, '', hash);
+    }
+
     if (currentCleanup) {
       currentCleanup();
       currentCleanup = null;

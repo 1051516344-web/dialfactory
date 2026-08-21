@@ -36,6 +36,8 @@ const NavBar = (() => {
         <div class="nav-links">
           ${linksHtml}
         </div>
+        <button class="btn btn-ghost btn-sm" id="nav-signout" title="退出登录"
+                style="margin-left:auto;font-size:0.8rem;">退出</button>
       </nav>
     `;
   }
@@ -44,6 +46,14 @@ const NavBar = (() => {
     const target = document.getElementById('nav-container');
     if (target) {
       target.innerHTML = render();
+      const signout = document.getElementById('nav-signout');
+      if (signout) {
+        signout.addEventListener('click', async () => {
+          await DB.signOut();
+          window.location.hash = '#/';
+          window.location.reload();
+        });
+      }
     }
   }
 

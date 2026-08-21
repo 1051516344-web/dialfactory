@@ -2,6 +2,7 @@
 // 面向工厂管理层，不展示技术细节，突出业务价值和实施路线
 
 const PptxGenJS = require('pptxgenjs');
+const path = require('path');
 
 async function main() {
   const ppt = new PptxGenJS();
@@ -821,7 +822,7 @@ async function main() {
   // ============================================================
   // 保存
   // ============================================================
-  const outPath = 'c:/Users/10515/Desktop/DialFactory/DialFactory_项目方案汇报.pptx';
+  const outPath = path.join(__dirname, 'DialFactory_项目方案汇报.pptx');
   await ppt.writeFile({ fileName: outPath });
   console.log('✅ PPT 已生成：' + outPath);
   console.log(`  共计 ${ppt.slides.length} 页`);

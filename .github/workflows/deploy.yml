@@ -8,11 +8,23 @@ permissions:
   contents: write
   pages: write
 
+# #12: cancel superseded runs to avoid concurrent deploy races
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pin action SHAs (supply-chain hardening)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # R5: stage ONLY the web assets — do not publish source, docs, or binaries
+      - name: Stage web assets
+        run: |
+          mkdir -p _site
+          cp -r index.html css js _site/
 
       - name: Enable GitHub Pages (auto-configure)
         run: |
@@ -24,9 +36,8 @@ jobs:
             -d '{"source":{"branch":"gh-pages","path":"/"}}' || true
 
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          exclude_dirs: .github,supabase,.claude,AI_CONTEXT
+          publish_dir: _site
           force_orphan: true

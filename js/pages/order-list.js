@@ -9,10 +9,15 @@ const OrderListPage = (() => {
   let currentFilters = { status: '', customerId: '', search: '', deptId: '', process: '' };
   let currentPage = 0;
   let allOrders = [];
+  let totalCount = 0;          // server-side unfiltered count (drives "load more")
+  let renderSeq = 0;           // race guard — drop stale responses
+  let searchDebounceTimer = null;
 
   async function render(filters = {}) {
+    const seq = ++renderSeq;
+
     // Phase 4: Parse URL query from hash (e.g. #/orders?process=冲板)
-    const hash = window.location.hash.slice(1); // /orders?process=冲板
+    const hash = window.location.hash.slice(1);
     const urlQuery = {};
     const qIdx = hash.indexOf('?');
     if (qIdx >= 0) {
@@ -24,6 +29,7 @@ const OrderListPage = (() => {
     Object.assign(currentFilters, urlQuery, filters);
     currentPage = 0;
     allOrders = [];
+    totalCount = 0;
 
     const container = document.getElementById('page-container');
     if (!container) return;
@@ -47,6 +53,7 @@ const OrderListPage = (() => {
       OrdersAPI.list({ ...currentFilters, page: 0 }),
       deptCachePromise || Promise.resolve()
     ]);
+    if (seq !== renderSeq) return;
 
     if (!ordersResult.ok) {
       container.innerHTML = `
@@ -63,17 +70,11 @@ const OrderListPage = (() => {
 
     const customers = custResult.ok ? custResult.data : [];
     let orders = ordersResult.data || [];
+    totalCount = ordersResult.count || 0;
 
-    // Phase 4: Process filter — query production_records for matching orders
-    if (currentFilters.process) {
-      const { ok: prOk, data: prData } = await ProductionRecordsAPI.listActive();
-      if (prOk && prData) {
-        const matchingOrderIds = new Set(
-          prData.filter(r => r.process_name === currentFilters.process).map(r => r.order_id)
-        );
-        orders = orders.filter(o => matchingOrderIds.has(o.id));
-      }
-    }
+    // Phase 4: Process filter — client-side (applied per page)
+    orders = await filterByProcess(orders);
+    if (seq !== renderSeq) return;
 
     allOrders = orders;
 
@@ -82,26 +83,44 @@ const OrderListPage = (() => {
     let nodeStatsMap = {};
     if (orderIds.length > 0) {
       const statsResult = await OrdersAPI.getNodeStats(orderIds);
+      if (seq !== renderSeq) return;
       if (statsResult.ok) nodeStatsMap = statsResult.data;
     }
 
     // Merge + sort
     const enriched = orders.map(o => ({
       ...o,
-      stats: nodeStatsMap[o.id] || { total: 0, done: 0, active: 0, paused: 0, waiting: 0, currentNode: null, isStalled: false, stalledDays: 0, hasNodes: false, progressPercent: 0 }
+      stats: nodeStatsMap[o.id] || defaultStats()
     }));
 
-    // Sort: stalled first, then due_date ascending
-    enriched.sort((a, b) => {
-      if (a.stats.isStalled && !b.stats.isStalled) return -1;
-      if (!a.stats.isStalled && b.stats.isStalled) return 1;
-      return new Date(a.due_date) - new Date(b.due_date);
-    });
-
+    enriched.sort(sortOrders);
     allOrders = enriched;
 
     // Render
-    renderFull(container, enriched, customers, ordersResult.count || 0);
+    renderFull(container, enriched, customers);
+  }
+
+  /** Client-side process filter — returns orders with an active record of that process. */
+  async function filterByProcess(orders) {
+    if (!currentFilters.process) return orders;
+    const { ok, data: prData } = await ProductionRecordsAPI.listActive();
+    if (!ok || !prData) return orders;
+    const matchingOrderIds = new Set(
+      prData.filter(r => r.process_name === currentFilters.process).map(r => r.order_id)
+    );
+    return orders.filter(o => matchingOrderIds.has(o.id));
+  }
+
+  function defaultStats() {
+    return { total: 0, done: 0, active: 0, paused: 0, waiting: 0, currentNode: null, isStalled: false, stalledDays: 0, hasNodes: false, progressPercent: 0 };
+  }
+
+  /** Stalled first, then due_date ascending. */
+  function sortOrders(a, b) {
+    const sa = a.stats || {}, sb = b.stats || {};
+    if (sa.isStalled && !sb.isStalled) return -1;
+    if (!sa.isStalled && sb.isStalled) return 1;
+    return new Date(a.due_date) - new Date(b.due_date);
   }
 
   function renderFilterBar() {
@@ -115,6 +134,7 @@ const OrderListPage = (() => {
           <option value="in_production" ${currentFilters.status==='in_production'?'selected':''}>生产中</option>
           <option value="paused" ${currentFilters.status==='paused'?'selected':''}>已暂停</option>
           <option value="completed" ${currentFilters.status==='completed'?'selected':''}>已完成</option>
+          <option value="cancelled" ${currentFilters.status==='cancelled'?'selected':''}>已取消</option>
         </select>
         <select class="form-select" id="filter-dept" onchange="OrderListPage.onFilter('deptId', this.value)">
           <option value="">全部部门</option>
@@ -145,12 +165,9 @@ const OrderListPage = (() => {
     }
   }
 
-  async function getDeptId(name) {
-    if (!deptCache) {
-      await ensureDeptCache();
-      await deptCachePromise; // ensure resolved
-    }
-    return deptCache ? (deptCache[name] || '') : '';
+  /** B1-FIX: synchronous lookup (was async → returned a Promise object). */
+  function getDeptId(name) {
+    return (deptCache && deptCache[name]) || '';
   }
 
   async function onFilter(key, value) {
@@ -158,9 +175,18 @@ const OrderListPage = (() => {
     await render();
   }
 
-  async function onSearch(value) {
+  function onSearch(value) {
     currentFilters.search = value;
-    await render();
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(async () => {
+      await render();
+      // B21-FIX: restore focus so typing continues (render() rebuilds the input)
+      const input = document.getElementById('filter-search');
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    }, 300);
   }
 
   async function loadMore() {
@@ -168,22 +194,26 @@ const OrderListPage = (() => {
     const { ok, data: orders } = await OrdersAPI.list({ ...currentFilters, page: currentPage });
     if (!ok || !orders || orders.length === 0) return;
 
-    const orderIds = orders.map(o => o.id);
+    let newOrders = await filterByProcess(orders);
+
+    const orderIds = newOrders.map(o => o.id);
     const statsResult = await OrdersAPI.getNodeStats(orderIds);
     const nodeStatsMap = statsResult.ok ? statsResult.data : {};
 
-    const enriched = orders.map(o => ({
+    const enriched = newOrders.map(o => ({
       ...o,
-      stats: nodeStatsMap[o.id] || { total: 0, done: 0, active: 0, paused: 0, waiting: 0, currentNode: null, isStalled: false, stalledDays: 0, hasNodes: false, progressPercent: 0 }
+      stats: nodeStatsMap[o.id] || defaultStats()
     }));
 
     allOrders = [...allOrders, ...enriched];
-    // Re-render with updated list
+    // B4-FIX: re-sort the full merged list so appended data participates in ordering
+    allOrders.sort(sortOrders);
+
     const container = document.getElementById('page-container');
-    renderFull(container, allOrders, [], allOrders.length);
+    renderFull(container, allOrders, []);
   }
 
-  function renderFull(container, orders, _customers, totalCount) {
+  function renderFull(container, orders, _customers) {
     if (orders.length === 0) {
       container.innerHTML = `
         <div class="page-header">
@@ -197,7 +227,8 @@ const OrderListPage = (() => {
     }
 
     const cardsHtml = orders.map(o => renderOrderCard(o)).join('');
-    const hasMore = orders.length >= (currentPage + 1) * CONFIG.PAGE_SIZE;
+    // B4-FIX: base "load more" on server-side totalCount, not filtered length
+    const hasMore = totalCount > allOrders.length;
 
     container.innerHTML = `
       <div class="page-header">
@@ -232,7 +263,7 @@ const OrderListPage = (() => {
           if (i < s.done + s.active) return { status: 'active' };
           if (i < s.done + s.active + s.paused) return { status: 'paused' };
           return { status: 'waiting' };
-        }))
+        }), order.status)
       : order.status;
 
     return `
@@ -262,10 +293,7 @@ const OrderListPage = (() => {
   }
 
   function escapeHTML(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   return { render, onFilter, onSearch, loadMore };

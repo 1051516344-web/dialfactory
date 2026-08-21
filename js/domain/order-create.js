@@ -53,6 +53,9 @@ const OrderCreate = (() => {
       due_date:      formData.due_date,
       base_texture:  formData.base_texture || null,
       plate_color:   formData.plate_color || null,
+      // C7: orders.specs JSONB keys — registered contract (see Freeze manifest):
+      //   base_plate_color / customer_order_no / production_no
+      //   + drawing_name / drawing_path (set later by StorageAPI.uploadDrawing)
       specs:         {
         base_plate_color: formData.base_plate_color || null,
         customer_order_no: formData.customer_order_no || null,
@@ -85,7 +88,7 @@ const OrderCreate = (() => {
     const result = await OrdersAPI.createOrder(orderData, nodesData);
     if (!result.ok) return result;
 
-    return { ok: true, orderId: result.data.order.id };
+    return { ok: true, orderId: result.data.order.id, nodes: result.data.nodes };
   }
 
   /**

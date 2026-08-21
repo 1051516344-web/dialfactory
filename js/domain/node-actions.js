@@ -346,6 +346,7 @@ const NodeActions = (() => {
 
     let currentSeq = newSeq;
     let firstNewId = null;
+    const insertedNodes = []; // B6: keep real inserted rows for status derivation
 
     for (const orig of rangeNodes) {
       const r = await OrdersAPI.insertNode({
@@ -361,6 +362,7 @@ const NodeActions = (() => {
         note:         `Segment rework from ${rangeStart.process_code}`
       });
       if (!r.ok) return { ok: false, error: r.error, phase: 'primary' };
+      insertedNodes.push(r.data);
       if (!firstNewId) firstNewId = r.data.id;
       currentSeq += 2; // micro-gap within segment
     }
@@ -372,8 +374,9 @@ const NodeActions = (() => {
       if (!br.ok) warning = 'seq_bump_failed';
     }
 
-    const allNodes = [...nodes, ...rangeNodes.map(() => ({}))]; // placeholder
-    const newStatus = OrderState.derive(nodes, order.status);
+    // B6: derive from real inserted nodes, not empty placeholders
+    const allNodes = [...nodes, ...insertedNodes];
+    const newStatus = OrderState.derive(allNodes, order.status);
     await OrdersAPI.updateStatus(order.id, newStatus);
 
     return { ok: true, newSeq, needsBump, newOrderStatus: newStatus, warning };

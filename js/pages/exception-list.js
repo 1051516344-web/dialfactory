@@ -8,6 +8,7 @@ const ExceptionListPage = (() => {
   let currentType = '';
   let currentPage = 0;
   let allItems = [];
+  let totalCount = 0;   // server-side exact count (drives "load more" — #16)
 
   async function render() {
     currentPage = 0;
@@ -39,7 +40,8 @@ const ExceptionListPage = (() => {
 
     const items = data || [];
     allItems = items;
-    renderFull(container, items, count || items.length);
+    totalCount = count || items.length;
+    renderFull(container, items, totalCount);
   }
 
   function renderFilterBar() {
@@ -53,7 +55,7 @@ const ExceptionListPage = (() => {
           ${typeOptions}
         </select>
         <span style="font-size:var(--font-size-sm);color:var(--text-secondary);display:flex;align-items:center;">
-          共 ${allItems.length} 条
+          共 ${totalCount || allItems.length} 条
         </span>
       </div>
     `;
@@ -83,16 +85,18 @@ const ExceptionListPage = (() => {
     }
 
     allItems = data || [];
-    renderFull(container, allItems, count || allItems.length);
+    totalCount = count || allItems.length;
+    renderFull(container, allItems, totalCount);
   }
 
   async function loadMore() {
     currentPage++;
-    const { ok, data } = await ExceptionsAPI.listAll({ type: currentType || undefined, page: currentPage });
+    const { ok, data, count } = await ExceptionsAPI.listAll({ type: currentType || undefined, page: currentPage });
     if (!ok || !data || data.length === 0) return;
 
     allItems = [...allItems, ...data];
-    renderFull(document.getElementById('page-container'), allItems, allItems.length);
+    if (count != null) totalCount = count;
+    renderFull(document.getElementById('page-container'), allItems, totalCount);
   }
 
   function renderFull(container, items, totalCount) {
@@ -106,7 +110,8 @@ const ExceptionListPage = (() => {
     }
 
     const cardsHtml = items.map(e => renderCard(e)).join('');
-    const hasMore = items.length >= (currentPage + 1) * CONFIG.PAGE_SIZE;
+    // #16: base "load more" on server-side total, not the loaded-page heuristic
+    const hasMore = items.length < totalCount;
 
     container.innerHTML = `
       <div class="page-header"><h1>异常记录</h1></div>
@@ -121,12 +126,14 @@ const ExceptionListPage = (() => {
   }
 
   function renderCard(e) {
-    const node = e.node || {};
-    const orders = node.orders || {};
-    const orderId = node.order_id;
+    // B22: node/order may be orphaned (node deleted) — guard against /orders/undefined
+    const node = e.node;
+    const orderId = node ? node.order_id : null;
+    const orderNo = node?.orders?.order_no || node?.order_no || '—';
+    const processName = node?.process_name || '—';
 
     return `
-      <div class="card exception-list-card" onclick="Router.navigate('/orders/${orderId}')">
+      <div class="card exception-list-card" ${orderId ? `onclick="Router.navigate('/orders/${orderId}')" style="cursor:pointer;"` : ''}>
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <span style="font-weight:600;color:var(--color-danger);">${escapeHTML(e.type)}</span>
           <span style="font-size:var(--font-size-sm);color:var(--text-muted);">${Format.date(e.created_at)}</span>
@@ -135,17 +142,14 @@ const ExceptionListPage = (() => {
           ${escapeHTML(String(e.qty))}件 · ${escapeHTML(e.resolution || '—')}
         </div>
         <div style="font-size:var(--font-size-sm);color:var(--text-muted);margin-top:2px;">
-          #${escapeHTML(orders.order_no || '—')} · ${escapeHTML(node.process_name || '—')}
+          #${escapeHTML(orderNo)} · ${escapeHTML(processName)}
         </div>
       </div>
     `;
   }
 
   function escapeHTML(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = String(str);
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   return { render, onFilter, loadMore };

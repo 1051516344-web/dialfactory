@@ -27,7 +27,7 @@ const ExceptionsAPI = (() => {
 
   async function listAll({ type, page = 0, pageSize = 20 } = {}) {
     let query = DB.get().from('exception_events')
-      .select('id,node_id,type,qty,resolution,created_at, node:order_nodes(order_id, process_name, orders!inner(order_no))', { count: 'exact' })
+      .select('id,node_id,type,qty,resolution,created_at, node:order_nodes(order_id, process_name, orders(order_no))', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(page * pageSize, (page + 1) * pageSize - 1);
 

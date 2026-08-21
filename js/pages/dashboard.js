@@ -12,7 +12,7 @@ const DashboardPage = (() => {
 
     container.innerHTML = `
       <div class="page-header"><h1>生产明细</h1></div>
-      ${Skeleton.cards(4)}
+      ${Skeleton.cards(5)}
     `;
 
     // Fetch overview + customer names in parallel
@@ -80,6 +80,11 @@ const DashboardPage = (() => {
           <div class="kpi-label">当前生产工序数</div>
           <div class="kpi-value" style="color:#0F172A;">${d.todayActiveProcesses}</div>
           <div class="kpi-subtitle">活跃工序类型</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">已取消订单</div>
+          <div class="kpi-value" style="color:#6B7280;">${d.cancelledOrders ?? 0}</div>
+          <div class="kpi-subtitle">取消总数</div>
         </div>
       </div>
     `;
@@ -237,10 +242,7 @@ const DashboardPage = (() => {
   }
 
   function escapeHTML(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   return { render, toggleSection };

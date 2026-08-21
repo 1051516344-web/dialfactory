@@ -37,15 +37,23 @@ const ConfirmDialog = (() => {
       }
     }
 
-    confirmBtn.addEventListener('click', () => {
+    confirmBtn.addEventListener('click', async () => {
+      // B16: guard against double-submit while onConfirm is pending
+      if (confirmBtn.disabled) return;
+      confirmBtn.disabled = true;
+
       // Collect form data
       const inputs = overlayEl.querySelectorAll('input, select, textarea');
       const formData = {};
       inputs.forEach(el => {
         if (el.name) formData[el.name] = el.value;
       });
-      cleanup();
-      if (onConfirm) onConfirm(formData);
+
+      try {
+        if (onConfirm) await onConfirm(formData);
+      } finally {
+        cleanup();
+      }
     });
 
     cancelBtn.addEventListener('click', () => {
@@ -83,9 +91,7 @@ const ConfirmDialog = (() => {
   }
 
   function escapeHTML(str) {
-    const div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   return { show, close };

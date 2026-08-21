@@ -57,7 +57,7 @@ const OrdersAPI = (() => {
       ),
       DB.call(
         db.from('order_nodes')
-          .select('id,order_id,process_id,process_name,process_code,dept_id,dept_name,seq,rework_pass,status,pause_reason,qty_out,note,created_at,updated_at')
+          .select('id,order_id,process_id,process_name,process_code,dept_id,dept_name,seq,rework_pass,status,pause_reason,qty_out,note,created_at,updated_at, process:processes(type)')
           .eq('order_id', orderId)
           .order('seq', { ascending: true })
       )
@@ -141,6 +141,15 @@ const OrdersAPI = (() => {
       stalledDays,
       hasNodes: true
     };
+  }
+
+  /**
+   * Exact order_no lookup (idempotent dedup check — B18).
+   */
+  async function getByOrderNo(orderNo) {
+    return DB.call(
+      DB.get().from('orders').select('id').eq('order_no', orderNo).maybeSingle()
+    );
   }
 
   /**
@@ -266,6 +275,12 @@ const OrdersAPI = (() => {
   async function deleteOrder(orderId) {
     const db = DB.get();
 
+    // Step 0: Delete production_records (FK order_id RESTRICT blocks order delete)
+    const r0 = await DB.call(
+      db.from('production_records').delete().eq('order_id', orderId)
+    );
+    if (!r0.ok) return { ok: false, error: 'Failed to delete production records', phase: 'production_records' };
+
     // Step 1: Delete exception_events for this order's nodes
     const { data: nodes } = await DB.call(
       db.from('order_nodes').select('id').eq('order_id', orderId)
@@ -284,6 +299,17 @@ const OrdersAPI = (() => {
     );
     if (!r2.ok) return { ok: false, error: 'Failed to delete nodes', phase: 'nodes' };
 
+    // Step 2b: Remove this order from route templates' associated_orders
+    const { data: templates } = await DB.call(
+      db.from('process_route_templates').select('id, associated_orders').contains('associated_orders', [orderId])
+    );
+    if (templates && templates.length > 0) {
+      for (const t of templates) {
+        const remaining = (t.associated_orders || []).filter(id => id !== orderId);
+        await DB.call(db.from('process_route_templates').update({ associated_orders: remaining }).eq('id', t.id));
+      }
+    }
+
     // Step 3: Delete order
     const r3 = await DB.call(
       db.from('orders').delete().eq('id', orderId)
@@ -293,5 +319,5 @@ const OrdersAPI = (() => {
     return { ok: true };
   }
 
-  return { list, getById, getNodeStats, updateStatus, updateNode, insertNode, bumpSeq, createOrder, deleteOrder };
+  return { list, getById, getByOrderNo, getNodeStats, updateStatus, updateNode, insertNode, bumpSeq, createOrder, deleteOrder };
 })();

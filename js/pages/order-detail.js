@@ -112,6 +112,8 @@ const OrderDetailPage = (() => {
         : renderExceptions(currentExceptions, nodes)
       }
     `;
+
+    attachHeaderButtons(container);
   }
 
   // ==========================================================
@@ -158,7 +160,9 @@ const OrderDetailPage = (() => {
     }
 
     // Phase 3-E: Look up production record for this node
-    const prodRecord = currentProductionRecords.find(r => r.process_name === node.process_name);
+    // B5: prefer node_id match (rework/append may reuse a process name)
+    const prodRecord = currentProductionRecords.find(r => r.node_id === node.id)
+      || currentProductionRecords.find(r => r.process_name === node.process_name);
     const prodIsActive = prodRecord && prodRecord.status === '生产中';
 
     // Action buttons
@@ -189,6 +193,23 @@ const OrderDetailPage = (() => {
       actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onStartProduction('${node.id}')">开始生产</button>`;
     } else if (prodIsActive) {
       actionsHtml += `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onCompleteProduction('${node.id}','${prodRecord.id}')">生产完成</button>`;
+    }
+
+    // V1.1: Undo (within time window) — B14 moved from string-replace override
+    const elapsed = Date.now() - new Date(node.updated_at).getTime();
+    const undoWindow = (CONFIG.UNDO_WINDOW_MINUTES || 5) * 60 * 1000;
+    const canUndo = (node.status === 'done' || node.status === 'paused' || node.status === 'active')
+                    && elapsed < undoWindow
+                    && currentOrder.status !== 'completed'
+                    && currentOrder.status !== 'cancelled'
+                    && (node.rework_pass || 0) === 0;
+    if (canUndo) {
+      actionsHtml += `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onUndo('${node.id}')">撤销</button>`;
+    }
+
+    // V1.1: Segment rework on done nodes
+    if (node.status === 'done' && node.dept_id && currentOrder.status !== 'completed' && currentOrder.status !== 'cancelled') {
+      actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onSegmentRework('${node.id}')">段返工</button>`;
     }
 
     return `
@@ -412,37 +433,34 @@ const OrderDetailPage = (() => {
       return;
     }
 
-    // Success — update local state
-    if (result.updatedNode) {
-      const idx = currentNodeList.findIndex(n => n.id === result.updatedNode.id);
-      if (idx >= 0) currentNodeList[idx] = result.updatedNode;
-    }
-    if (result.activatedNode) {
-      const idx = currentNodeList.findIndex(n => n.id === result.activatedNode.id);
-      if (idx >= 0) currentNodeList[idx] = result.activatedNode;
-    }
-
-    // Update order status
-    if (result.newOrderStatus) {
-      currentOrder.status = result.newOrderStatus;
-    }
-
     // Complex if: newNode created, seq bump failed, or no updatedNode (structural change like segment rework)
     const isComplex = !!(result.newNode || result.warning === 'seq_bump_failed' || !result.updatedNode);
 
     if (isComplex) {
-      // Complex: rework / append — full refresh needed (new nodes alter flow structure)
-      if (result.newNode) currentNodeList.push(result.newNode);
-      if (result.warning === 'seq_bump_failed') {
-        const { ok, data: order } = await OrdersAPI.getById(currentOrder.id);
-        if (ok) {
-          currentNodeList = order.nodes || [];
-          currentOrder.nodes = currentNodeList;
-        }
+      // B13: structural change (rework/append/segment) — refetch authoritative state
+      // so seq bumps and other node mutations are reflected, not guessed locally.
+      const { ok, data: order } = await OrdersAPI.getById(currentOrder.id);
+      if (ok) {
+        currentOrder = order;
+        currentOrder.nodes = order.nodes || [];
+        currentNodeList = currentOrder.nodes;
       }
       renderFull(document.getElementById('page-container'));
       await loadDrawing(currentOrder);
     } else {
+      // Success — update local state
+      if (result.updatedNode) {
+        const idx = currentNodeList.findIndex(n => n.id === result.updatedNode.id);
+        if (idx >= 0) currentNodeList[idx] = result.updatedNode;
+      }
+      if (result.activatedNode) {
+        const idx = currentNodeList.findIndex(n => n.id === result.activatedNode.id);
+        if (idx >= 0) currentNodeList[idx] = result.activatedNode;
+      }
+      if (result.newOrderStatus) {
+        currentOrder.status = result.newOrderStatus;
+      }
+
       // P0-FIX: Simple — partial DOM update (no full page rebuild)
       const container = document.getElementById('page-container');
       updateNodeCardInDOM(result.updatedNode);
@@ -524,10 +542,7 @@ const OrderDetailPage = (() => {
   }
 
   function escapeHTML(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   // ==========================================================
@@ -623,54 +638,9 @@ const OrderDetailPage = (() => {
     });
   }
 
-  // Add cancel button to info section + undo button to node cards
-  const origRenderFull = renderFull;
-  renderFull = function(container) {
-    origRenderFull(container);
-    // Add cancel button if applicable
-    if (currentOrder.status !== 'completed' && currentOrder.status !== 'cancelled') {
-      const header = container.querySelector('.page-header');
-      if (header) {
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'btn btn-danger btn-sm';
-        cancelBtn.textContent = '取消订单';
-        cancelBtn.style.cssText = 'margin-left:auto;font-size:0.8rem;';
-        cancelBtn.onclick = onCancelOrder;
-        header.appendChild(cancelBtn);
-
-        // Trial delete button (temporary)
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'btn btn-danger btn-sm';
-        deleteBtn.textContent = '试运行清理';
-        deleteBtn.style.cssText = 'margin-left:4px;font-size:0.8rem;background:#DC2626;';
-        deleteBtn.onclick = onDeleteOrder;
-        header.appendChild(deleteBtn);
-      }
-    }
-  };
-
-  // Override renderNodeCard to include undo + segment rework buttons
-  const origRenderNodeCard = renderNodeCard;
-  renderNodeCard = function(node, exceptions) {
-    let html = origRenderNodeCard(node, exceptions);
-    // Add undo button if within time window and status allows
-    const elapsed = Date.now() - new Date(node.updated_at).getTime();
-    const undoWindow = (CONFIG.UNDO_WINDOW_MINUTES || 5) * 60 * 1000;
-    const canUndo = (node.status === 'done' || node.status === 'paused' || node.status === 'active')
-                    && elapsed < undoWindow
-                    && currentOrder.status !== 'completed'
-                    && currentOrder.status !== 'cancelled'
-                    && (node.rework_pass || 0) === 0;
-    if (canUndo) {
-      html = html.replace('</div>', `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onUndo('${node.id}')" style="font-size:0.7rem;padding:2px 6px;margin-left:4px;">撤销</button></div>`);
-    }
-    // Add segment rework button on done nodes
-    const actions = NodeState.getAvailableActions(node);
-    if (node.status === 'done' && node.dept_id && currentOrder.status !== 'completed' && currentOrder.status !== 'cancelled') {
-      html = html.replace('</div>', `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onSegmentRework('${node.id}')" style="margin-left:4px;">段返工</button></div>`);
-    }
-    return html;
-  };
+  // NOTE (B14): cancel/delete header buttons are attached inside renderFull() via
+  // attachHeaderButtons(), and undo/segment-rework buttons are rendered directly in
+  // renderNodeCard(). No string-replace overrides are used anymore.
 
   // ==========================================================
   // Phase 4: Production Timeline
@@ -755,14 +725,28 @@ const OrderDetailPage = (() => {
     return `${mins}分`;
   }
 
+  /** B16: parse optional numeric input — null for empty, number for valid (incl. 0). */
+  function parseQty(v) {
+    if (v == null || v === '') return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
   async function onStartProduction(nodeId) {
     const node = getNode(nodeId);
     if (!node) return;
-    const result = await ProductionRecordsAPI.create({
-      order_id: currentOrder.id,
-      process_name: node.process_name,
-      status: '生产中'
-    });
+    // B11: update an existing 待生产 record instead of creating a duplicate
+    // B5: match by node_id first (rework/append may reuse a process name)
+    const existing = currentProductionRecords.find(r => r.node_id === node.id && r.status === '待生产')
+      || currentProductionRecords.find(r => r.process_name === node.process_name && r.status === '待生产');
+    const result = existing
+      ? await ProductionRecordsAPI.update(existing.id, { status: '生产中', created_at: new Date().toISOString() })
+      : await ProductionRecordsAPI.create({
+          order_id: currentOrder.id,
+          node_id: node.id,
+          process_name: node.process_name,
+          status: '生产中'
+        });
     if (result.ok) {
       Toast.success('已开始生产: ' + node.process_name);
       refreshProductionRecords();
@@ -790,10 +774,14 @@ const OrderDetailPage = (() => {
       `,
       confirmLabel: '确认完成',
       onConfirm: async (data) => {
+        // B16: robust parse — distinguish empty input ("") from a valid "0"
+        const goodQty = parseQty(data.good_qty);
+        const badQty = parseQty(data.bad_qty);
+
         // 1. Complete the production record (sets completed_at + duration_minutes)
         const fields = { status: '已完成' };
-        if (data.good_qty) fields.good_qty = parseInt(data.good_qty, 10);
-        if (data.bad_qty) fields.bad_qty = parseInt(data.bad_qty, 10);
+        if (goodQty != null) fields.good_qty = goodQty;
+        if (badQty != null) fields.bad_qty = badQty;
         const prResult = await ProductionRecordsAPI.update(recordId, fields);
         if (!prResult.ok) {
           Toast.error(prResult.error || '操作失败');
@@ -803,8 +791,10 @@ const OrderDetailPage = (() => {
         // 2. Refresh production timeline to show updated duration
         await refreshProductionRecords();
 
-        // 3. Advance the node to move the flow forward
-        const advanceResult = await NodeActions.advance(currentOrder, node);
+        // 3. Advance the node to move the flow forward (B12: 检验 needs qty_out)
+        const processType = node.process_type || node.process?.type;
+        const advanceOpts = (processType === '检验') ? { qtyOut: goodQty } : {};
+        const advanceResult = await NodeActions.advance(currentOrder, node, advanceOpts);
         handleActionResult(advanceResult);
 
         Toast.success('生产完成: ' + node.process_name);
@@ -815,13 +805,11 @@ const OrderDetailPage = (() => {
   async function refreshProductionRecords() {
     const pr = await ProductionRecordsAPI.listByOrderId(currentOrder.id);
     currentProductionRecords = pr.ok ? pr.data : [];
-    // Re-render the timeline section and node cards (for button state changes)
+    // B10: re-render in place — keep #production-timeline-section so later updates find it
     const container = document.getElementById('page-container');
     const timelineSection = document.getElementById('production-timeline-section');
     if (timelineSection) {
-      const temp = document.createElement('div');
-      temp.innerHTML = renderProductionTimeline(currentProductionRecords);
-      timelineSection.replaceWith(temp.firstElementChild);
+      timelineSection.innerHTML = renderProductionTimeline(currentProductionRecords);
     }
     // Refresh all node cards to update production buttons
     currentNodeList.forEach(n => updateNodeCardInDOM(n));

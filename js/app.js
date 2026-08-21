@@ -51,6 +51,18 @@ const App = (() => {
       return;
     }
 
+    // Auth gate — require an authenticated user (R1)
+    let user = null;
+    try {
+      user = await DB.getUser();
+    } catch (e) {
+      console.warn('[DialFactory] Auth check failed:', e);
+    }
+    if (!user) {
+      Login.render();
+      return;
+    }
+
     // Verify DB connection
     const { ok, error } = await DB.call(
       db.from('departments').select('count', { count: 'exact', head: true })

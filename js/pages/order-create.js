@@ -9,6 +9,7 @@ const OrderCreatePage = (() => {
   let formData = {};
   let processList = [];    // all 35 processes for Route Builder
   let selectedMap = {};    // process_id -> boolean
+  let customerList = [];   // cached customers (B9: preserved across step1 back-navigation)
 
   async function render() {
     step = 1;
@@ -24,7 +25,7 @@ const OrderCreatePage = (() => {
       CustomersAPI.list(),
       ProcessesAPI.listProcesses()
     ]);
-    const customers = custResult.ok ? custResult.data : [];
+    customerList = custResult.ok ? custResult.data : [];
     processList = procResult.ok ? procResult.data : [];
 
     // P1-FIX: Batch department names — single query instead of sequential for-loop
@@ -43,7 +44,7 @@ const OrderCreatePage = (() => {
       }
     }
 
-    renderStep1(container, customers);
+    renderStep1(container, customerList);
   }
 
   let deptCache = {};
@@ -170,9 +171,9 @@ const OrderCreatePage = (() => {
       return;
     }
 
-    // Check uniqueness
-    const { ok, data: existing } = await OrdersAPI.list({ search: formData.order_no });
-    if (ok && existing && existing.some(o => o.order_no === formData.order_no)) {
+    // B18: exact order_no lookup (was a fuzzy list search)
+    const existing = await OrdersAPI.getByOrderNo(formData.order_no);
+    if (existing.ok && existing.data) {
       document.getElementById('step1-errors').innerHTML = '<div>· 订单编号已存在</div>';
       return;
     }
@@ -272,9 +273,10 @@ const OrderCreatePage = (() => {
     });
   }
 
-  function backToStep1() {
+  async function backToStep1() {
     step = 1;
-    render();
+    // B9: preserve formData + drawingFile — render() would reset them
+    renderStep1(document.getElementById('page-container'), customerList);
   }
 
   function onDrawingSelected(input) {
@@ -300,73 +302,74 @@ const OrderCreatePage = (() => {
     const btn = document.getElementById('btn-submit');
     if (btn) { btn.disabled = true; btn.textContent = '创建中...'; }
 
-    // Build selected steps from processList + selectedMap + deptCache
-    const selectedSteps = processList.map(p => ({
-      process_id: p.id,
-      process_code: p.code,
-      process_name: p.name,
-      dept_id: p.default_dept_id,
-      dept_name: deptCache[p.default_dept_id] || '',
-      selected: !!selectedMap[p.id]
-    }));
+    try {
+      // Build selected steps from processList + selectedMap + deptCache
+      const selectedSteps = processList.map(p => ({
+        process_id: p.id,
+        process_code: p.code,
+        process_name: p.name,
+        dept_id: p.default_dept_id,
+        dept_name: deptCache[p.default_dept_id] || '',
+        selected: !!selectedMap[p.id]
+      }));
 
-    formData.source = 'manual';
-    const result = await OrderCreate.submit(formData, selectedSteps);
+      formData.source = 'manual';
+      const result = await OrderCreate.submit(formData, selectedSteps);
 
-    if (result.ok) {
-      // Upload drawing if selected (optional — failure does not block order creation)
-      if (drawingFile) {
-        const uploadResult = await StorageAPI.uploadDrawing(result.orderId, drawingFile);
-        if (!uploadResult.ok) {
-          Toast.warning('订单已创建，但图纸上传失败：' + uploadResult.error);
-        } else if (uploadResult.warning) {
-          Toast.warning(uploadResult.warning);
+      if (result.ok) {
+        // Upload drawing if selected (optional — failure does not block order creation)
+        if (drawingFile) {
+          const uploadResult = await StorageAPI.uploadDrawing(result.orderId, drawingFile);
+          if (!uploadResult.ok) {
+            Toast.warning('订单已创建，但图纸上传失败：' + uploadResult.error);
+          } else if (uploadResult.warning) {
+            Toast.warning(uploadResult.warning);
+          }
+          drawingFile = null;
         }
-        drawingFile = null;
-      }
 
-      // Phase 4: Auto-create production records for selected processes
-      const selectedNames = selectedSteps
-        .filter(s => s.selected)
-        .map(s => s.process_name);
-      if (selectedNames.length > 0) {
-        const prResult = await ProductionRecordsAPI.createForOrder(result.orderId, selectedNames);
-        if (!prResult.ok) {
-          console.warn('[OrderCreate] Production records creation failed:', prResult.error);
-        }
-      }
-
-      // Phase 4: Auto-save route template (non-blocking — failure does not affect order creation)
-      try {
-        const templateProcessList = selectedSteps
-          .filter(s => s.selected)
-          .map((s, i) => ({
-            order: i + 1,
-            process: s.process_name,
-            department: s.dept_name
-          }));
-        if (templateProcessList.length > 0) {
-          const rtResult = await RouteTemplatesAPI.saveRouteTemplate(templateProcessList, result.orderId);
-          if (!rtResult.ok) {
-            console.warn('[OrderCreate] Route template save failed:', rtResult.error);
+        // Phase 4: Auto-create production records for the created nodes (B5: node_id linked)
+        const nodes = result.nodes || [];
+        if (nodes.length > 0) {
+          const prResult = await ProductionRecordsAPI.createForOrder(result.orderId, nodes);
+          if (!prResult.ok) {
+            console.warn('[OrderCreate] Production records creation failed:', prResult.error);
           }
         }
-      } catch (e) {
-        console.warn('[OrderCreate] Route template save error:', e);
-      }
 
-      Router.navigate('/orders/' + result.orderId);
-    } else {
+        // Phase 4: Auto-save route template (non-blocking — failure does not affect order creation)
+        try {
+          const templateProcessList = selectedSteps
+            .filter(s => s.selected)
+            .map((s, i) => ({
+              order: i + 1,
+              process: s.process_name,
+              department: s.dept_name
+            }));
+          if (templateProcessList.length > 0) {
+            const rtResult = await RouteTemplatesAPI.saveRouteTemplate(templateProcessList, result.orderId);
+            if (!rtResult.ok) {
+              console.warn('[OrderCreate] Route template save failed:', rtResult.error);
+            }
+          }
+        } catch (e) {
+          console.warn('[OrderCreate] Route template save error:', e);
+        }
+
+        Router.navigate('/orders/' + result.orderId);
+      } else {
+        alert(result.error || '创建失败，请重试');
+      }
+    } catch (e) {
+      console.error('[OrderCreate] submit failed:', e);
+      alert('创建失败，请重试');
+    } finally {
       if (btn) { btn.disabled = false; btn.textContent = '创建订单 ✓'; }
-      alert(result.error || '创建失败，请重试');
     }
   }
 
   function escapeHTML(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return DOM.escapeHtml(str);
   }
 
   return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onDrawingSelected };

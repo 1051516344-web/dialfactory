@@ -36,5 +36,33 @@ const DB = (() => {
     }
   }
 
-  return { init, get, call };
+  // ==========================================================
+  // Auth helpers (R1 — authenticated-only access)
+  // ==========================================================
+  async function getUser() {
+    const c = get();
+    if (!c) return null;
+    const { data } = await c.auth.getUser();
+    return data?.user || null;
+  }
+
+  async function signIn(email, password) {
+    const c = get();
+    if (!c) return { error: { message: 'DB not initialized' } };
+    return c.auth.signInWithPassword({ email, password });
+  }
+
+  async function signOut() {
+    const c = get();
+    if (!c) return;
+    return c.auth.signOut();
+  }
+
+  function onAuthStateChange(cb) {
+    const c = get();
+    if (!c) return { data: { subscription: null } };
+    return c.auth.onAuthStateChange(cb);
+  }
+
+  return { init, get, call, getUser, signIn, signOut, onAuthStateChange };
 })();
