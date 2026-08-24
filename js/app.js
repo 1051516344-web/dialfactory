@@ -34,6 +34,11 @@ const App = (() => {
     Router.on('/exceptions', async () => {
       await ExceptionListPage.render();
     });
+
+    // Batch detail (Phase 4 · Batch layer)
+    Router.on('/batches/:id', async ({ params }) => {
+      await BatchDetailPage.render(params.id);
+    });
   }
 
   async function init() {

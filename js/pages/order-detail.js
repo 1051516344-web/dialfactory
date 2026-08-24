@@ -9,6 +9,8 @@ const OrderDetailPage = (() => {
   let currentNodeList = [];
   let currentExceptions = [];
   let currentProductionRecords = [];
+  let currentBatches = [];
+  let currentBatchRelations = [];
 
   async function render(orderId) {
     const container = document.getElementById('page-container');
@@ -49,6 +51,16 @@ const OrderDetailPage = (() => {
     // Phase 4: Load production records
     const pr = await ProductionRecordsAPI.listByOrderId(orderId);
     currentProductionRecords = pr.ok ? pr.data : [];
+
+    // Phase 4 (Batch layer): Load batches + split relations
+    const br = await BatchesAPI.listByOrderId(orderId);
+    if (br.ok) {
+      currentBatches = br.data.batches || [];
+      currentBatchRelations = br.data.relations || [];
+    } else {
+      currentBatches = [];
+      currentBatchRelations = [];
+    }
 
     renderFull(container);
     await loadDrawing(order);
@@ -102,6 +114,10 @@ const OrderDetailPage = (() => {
           ? EmptyState.render({ icon: '📋', title: '暂无工序节点', desc: '该订单尚未生成工序执行记录。' })
           : renderFlow(nodes, excByNode)
         }
+      </div>
+
+      <div id="order-batch-section">
+        ${renderBatchSection()}
       </div>
 
       <div id="production-timeline-section">
@@ -900,5 +916,101 @@ const OrderDetailPage = (() => {
     }
   }
 
-  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction };
+  // ==========================================================
+  // Production Batch section (Phase 4 · Batch layer)
+  // ==========================================================
+  function renderBatchSection() {
+    const { roots } = BatchState.buildTree(currentBatches, currentBatchRelations);
+    const body = currentBatches.length === 0
+      ? EmptyState.render({ icon: '🧾', title: '暂无生产批次', desc: '订单数量 ≠ 实际生产数量。请按现场实际创建批次。' })
+      : renderBatchTree(roots);
+
+    return `
+      <div class="section-title" style="margin-top:var(--space-lg);display:flex;align-items:center;gap:var(--space-sm);">
+        <span>生产批次 (${currentBatches.length})</span>
+        <button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="OrderDetailPage.showCreateBatchDialog()">创建批次</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;">${body}</div>
+    `;
+  }
+
+  function renderBatchTree(nodes, depth = 0) {
+    return nodes.map(node => {
+      const indent = depth * 20;
+      return `
+        <div style="padding:var(--space-sm) var(--space-md);border-bottom:1px solid var(--bg-muted);${depth ? `padding-left:${indent + 16}px;` : ''}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);">
+            <span style="font-weight:600;cursor:pointer;" onclick="Router.navigate('/batches/${node.id}')">${depth > 0 ? '├ ' : ''}#${escapeHTML(node.batch_no)}</span>
+            <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${Format.number(node.quantity)}片 · ${escapeHTML(node.color || '—')}</span>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px;">
+            ${batchBadge(node.status)}
+            ${node.status !== 'completed' && node.status !== 'cancelled'
+              ? `<button class="btn btn-ghost btn-sm" onclick="Router.navigate('/batches/${node.id}')">拆分</button>`
+              : ''}
+          </div>
+        </div>
+        ${node.children && node.children.length ? renderBatchTree(node.children.map(c => c.batch), depth + 1) : ''}
+      `;
+    }).join('');
+  }
+
+  function batchBadge(status) {
+    const st = BatchState.statusLabel(status);
+    return `<span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:var(--font-size-xs);color:#fff;background:${st.color};">${escapeHTML(st.label)}</span>`;
+  }
+
+  function showCreateBatchDialog() {
+    if (!currentOrder) return;
+    ConfirmDialog.show({
+      title: '创建批次',
+      content: `
+        <div class="form-group">
+          <label class="form-label">批次编号（人工填写）</label>
+          <input type="text" name="batch_no" class="form-input" placeholder="如 ${escapeHTML(currentOrder.order_no)}-01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">数量</label>
+          <input type="number" name="quantity" class="form-input" min="1" value="${currentOrder.order_qty || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">颜色（可空）</label>
+          <input type="text" name="color" class="form-input" placeholder="银色 / 黑色 / 蓝色">
+        </div>
+        <div class="form-group">
+          <label class="form-label">备注（可空）</label>
+          <input type="text" name="note" class="form-input">
+        </div>
+      `,
+      confirmLabel: '创建',
+      onConfirm: async (formData) => {
+        const batch_no = (formData.batch_no || '').trim();
+        const quantity = Number(formData.quantity);
+        if (!batch_no) { Toast.error('请填写批次编号'); return; }
+        if (!quantity || quantity <= 0) { Toast.error('数量必须大于 0'); return; }
+        const res = await BatchesAPI.createRootBatch({
+          order_id: currentOrder.id,
+          batch_no,
+          quantity,
+          color: formData.color,
+          note: formData.note
+        });
+        if (!res.ok) {
+          Toast.error(res.error || '创建失败');
+          return;
+        }
+        Toast.success('批次已创建');
+        // Refetch batches + re-render the batch section only
+        const br = await BatchesAPI.listByOrderId(currentOrder.id);
+        if (br.ok) {
+          currentBatches = br.data.batches || [];
+          currentBatchRelations = br.data.relations || [];
+        }
+        const section = document.getElementById('order-batch-section');
+        if (section) section.innerHTML = renderBatchSection();
+      }
+    });
+  }
+
+  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog };
 })();
