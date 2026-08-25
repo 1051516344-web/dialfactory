@@ -16,7 +16,8 @@ const OrderCreatePage = (() => {
     formData = {};
     processList = [];
     selectedMap = {};
-    drawingFile = null;
+    selectedOrderFile = null;
+    recognitionDone = false;
 
     const container = document.getElementById('page-container');
     if (!container) return;
@@ -48,14 +49,17 @@ const OrderCreatePage = (() => {
   }
 
   let deptCache = {};
-  let drawingFile = null;  // File object for optional drawing upload
+  let selectedOrderFile = null; // single merged "客户订单资料" file (image or PDF)
+  let recognitionDone = false;  // whether recognition has filled the form this session
+  let recognizing = false;      // whether an auto-recognition request is in flight
 
   // ==========================================================
   // Step 1: Basic Info
   // ==========================================================
   function renderStep1(container, customers) {
     const custOptions = customers.length > 0
-      ? customers.map(c => `<option value="${c.id}">${escapeHTML(c.short_name || c.name)}</option>`).join('')
+      ? '<option value="" ' + (formData.customer_id ? '' : 'selected') + '>请选择客户</option>' +
+        customers.map(c => `<option value="${c.id}" ${formData.customer_id === c.id ? 'selected' : ''}>${escapeHTML(c.short_name || c.name)}</option>`).join('')
       : '<option value="">— 暂无客户数据，可手动输入 —</option>';
 
     const texSuggestions = CONFIG.TEXTURE_SUGGESTIONS.map(t => `<option value="${t}">`).join('');
@@ -103,21 +107,15 @@ const OrderCreatePage = (() => {
           <datalist id="texture-suggestions">${texSuggestions}</datalist>
         </div>
         <div class="form-group">
-          <label class="form-label">电镀颜色</label>
-          <input type="text" id="form-color" class="form-input" placeholder="如 银白60s" value="${escapeHTML(formData.plate_color || '')}">
-        </div>
-        <div class="form-group">
-          <label class="form-label">板底颜色</label>
-          <input type="text" id="form-base-plate-color" class="form-input" placeholder="如 黑色喷漆、白底" value="${escapeHTML(formData.base_plate_color || '')}">
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">客户图纸 <span style="color:var(--text-secondary);font-weight:400;">（选填）</span></label>
-          <input type="file" id="form-drawing" class="form-input"
+          <label class="form-label">上传客户订单资料 <span style="color:var(--text-secondary);font-weight:400;">（选填）</span></label>
+          <input type="file" id="form-order-file" class="form-input"
                  accept=".pdf,.png,.jpg,.jpeg"
-                 onchange="OrderCreatePage.onDrawingSelected(this)"
+                 onchange="OrderCreatePage.onOrderFileSelected(this)"
                  style="padding:6px;">
-          ${drawingFile ? `<div style="font-size:var(--font-size-sm);color:var(--text-secondary);margin-top:2px;">已选择: ${escapeHTML(drawingFile.name)} (${(drawingFile.size / 1024).toFixed(0)} KB)</div>` : ''}
+          ${selectedOrderFile ? `<div style="font-size:var(--font-size-sm);color:var(--text-secondary);margin-top:2px;">已选择: ${escapeHTML(selectedOrderFile.name)} (${(selectedOrderFile.size / 1024).toFixed(0)} KB)</div>` : ''}
+          <div id="recognize-status" style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">
+            ${recognitionDone ? '✅ 已识别，请核对下方字段（均可手动修改）' : '上传客户订单图片/图纸，系统将自动识别订单信息'}
+          </div>
           <div style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">支持 PDF / PNG / JPEG，最大 10 MB</div>
         </div>
 
@@ -145,17 +143,9 @@ const OrderCreatePage = (() => {
     formData.order_qty   = document.getElementById('form-qty')?.value || '';
     formData.due_date    = document.getElementById('form-due')?.value || '';
     formData.base_texture = document.getElementById('form-texture')?.value || '';
-    formData.plate_color = document.getElementById('form-color')?.value || '';
-    formData.base_plate_color = document.getElementById('form-base-plate-color')?.value || '';
     formData.note        = document.getElementById('form-note')?.value || '';
     formData.route_id    = null;
     formData.source      = 'manual';
-
-    // Capture drawing file (File object can't survive DOM re-render)
-    const drawingInput = document.getElementById('form-drawing');
-    if (drawingInput && drawingInput.files && drawingInput.files.length > 0) {
-      drawingFile = drawingInput.files[0];
-    }
 
     const custSelect = document.getElementById('form-customer');
     if (custSelect) {
@@ -275,23 +265,75 @@ const OrderCreatePage = (() => {
 
   async function backToStep1() {
     step = 1;
-    // B9: preserve formData + drawingFile — render() would reset them
+    // B9: preserve formData + selectedOrderFile — render() would reset them
     renderStep1(document.getElementById('page-container'), customerList);
   }
 
-  function onDrawingSelected(input) {
+  function onOrderFileSelected(input) {
     if (input.files && input.files.length > 0) {
       const file = input.files[0];
       const v = StorageAPI.validateFile(file);
       if (!v.valid) {
         Toast.warning(v.error);
         input.value = '';
-        drawingFile = null;
+        selectedOrderFile = null;
         return;
       }
-      drawingFile = file;
+      selectedOrderFile = file;
+      // Auto-recognize: images trigger AI extraction, PDFs are stored only.
+      const isImage = file.type.startsWith('image/') || /\.(png|jpe?g)$/i.test(file.name);
+      if (isImage) recognize();
     } else {
-      drawingFile = null;
+      selectedOrderFile = null;
+    }
+  }
+
+  // ==========================================================
+  // AI recognition (auto-triggered on file select): image → 6 fields → editable form
+  // ==========================================================
+  async function recognize() {
+    const file = selectedOrderFile;
+    if (!file || recognizing) return;
+
+    recognizing = true;
+    const statusEl = document.getElementById('recognize-status');
+    if (statusEl) { statusEl.style.color = ''; statusEl.textContent = '识别中...'; }
+
+    try {
+      const res = await RecognizeAPI.extract(file);
+      if (!res.ok) {
+        if (statusEl) { statusEl.style.color = 'var(--color-danger)'; statusEl.textContent = '❌ ' + res.error + '，请手动填写'; }
+        Toast.warning(res.error + '，请手动填写');
+        return;
+      }
+      applyRecognition(res.data);
+    } catch (e) {
+      console.error('[OrderCreate] recognize failed:', e);
+      if (statusEl) { statusEl.style.color = 'var(--color-danger)'; statusEl.textContent = '❌ 识别失败，请手动填写'; }
+      Toast.warning('识别失败，请手动填写');
+    } finally {
+      recognizing = false;
+    }
+  }
+
+  function applyRecognition(r) {
+    const qty = OrderCreate.parseQuantity(r.order_quantity);
+    const due = OrderCreate.parseDeliveryDate(r.delivery_date);
+    const customer = CustomersAPI.match(customerList, r.customer_name);
+
+    formData.customer_order_no = r.customer_order_no || formData.customer_order_no || '';
+    formData.order_qty = qty != null ? String(qty) : formData.order_qty || '';
+    formData.due_date = due || formData.due_date || '';
+    formData.base_texture = r.base_texture || formData.base_texture || '';
+    formData.order_no = r.order_no || formData.order_no || '';
+    formData.customer_id = customer ? customer.id : (formData.customer_id || null);
+    formData.order_quantity_raw = r.order_quantity || null;
+
+    recognitionDone = true;
+    renderStep1(document.getElementById('page-container'), customerList);
+
+    if (r.customer_name && !customer) {
+      Toast.warning('未匹配到客户「' + r.customer_name + '」，请手动选择');
     }
   }
 
@@ -317,15 +359,16 @@ const OrderCreatePage = (() => {
       const result = await OrderCreate.submit(formData, selectedSteps);
 
       if (result.ok) {
-        // Upload drawing if selected (optional — failure does not block order creation)
-        if (drawingFile) {
-          const uploadResult = await StorageAPI.uploadDrawing(result.orderId, drawingFile);
+        // Auto-upload the merged "客户订单资料" file if selected
+        // (failure does not block order creation)
+        if (selectedOrderFile) {
+          const uploadResult = await StorageAPI.uploadDrawing(result.orderId, selectedOrderFile);
           if (!uploadResult.ok) {
-            Toast.warning('订单已创建，但图纸上传失败：' + uploadResult.error);
+            Toast.warning('订单已创建，但客户订单资料上传失败：' + uploadResult.error);
           } else if (uploadResult.warning) {
             Toast.warning(uploadResult.warning);
           }
-          drawingFile = null;
+          selectedOrderFile = null;
         }
 
         // Phase 4: Auto-create production records for the created nodes (B5: node_id linked)
@@ -372,5 +415,5 @@ const OrderCreatePage = (() => {
     return DOM.escapeHtml(str);
   }
 
-  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onDrawingSelected };
+  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onOrderFileSelected };
 })();

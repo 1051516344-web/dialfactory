@@ -81,7 +81,6 @@ const OrderDetailPage = (() => {
     });
 
     const specText = [order.base_texture, order.plate_color, order.specs?.base_plate_color].filter(Boolean).join('+') || '—';
-    const prodNo = order.specs?.production_no || '';
     const custOrderNo = order.specs?.customer_order_no || '';
 
     container.innerHTML = `
@@ -97,7 +96,7 @@ const OrderDetailPage = (() => {
           <div><span style="color:var(--text-secondary);">数量:</span> ${Format.number(order.order_qty)}件</div>
           <div><span style="color:var(--text-secondary);">交期:</span> ${Format.date(order.due_date)} (${Format.dueDays(order.due_date)})</div>
           <div><span style="color:var(--text-secondary);">规格:</span> ${escapeHTML(specText)}</div>
-          ${prodNo ? `<div><span style="color:var(--text-secondary);">生产号:</span> <span style="font-weight:600;color:var(--color-primary);">${escapeHTML(prodNo)}</span></div>` : ''}
+          <div><span style="color:var(--text-secondary);">订单编号:</span> <span style="font-weight:600;color:var(--color-primary);">${escapeHTML(order.order_no)}</span></div>
           ${custOrderNo ? `<div><span style="color:var(--text-secondary);">客单号:</span> ${escapeHTML(custOrderNo)}</div>` : ''}
           <div><span style="color:var(--text-secondary);">备注:</span> ${escapeHTML(order.note || '—')}</div>
         </div>

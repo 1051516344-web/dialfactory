@@ -112,7 +112,7 @@
 | 字段 | 表 | 用途 |
 |------|-----|------|
 | `route_snapshot` | `orders` | ADL-001：路线模板确认快照，含 `confirmed` 标记 |
-| `specs` | `orders` | 柔性规格参数。键：`base_plate_color` / `customer_order_no` / `production_no` / `drawing_name` / `drawing_path`（C7） |
+| `specs` | `orders` | 柔性规格参数。键：`customer_order_no`（客户订单编号） / `order_quantity_raw`（AI 识别原始数量字符串） / `drawing_name`（订单资料文件名） / `drawing_path`（订单资料存储路径） |
 
 ### RLS Strategy
 
@@ -120,6 +120,11 @@
 |-------|------|
 | V1 | `USING (true)` — 受信内网用户全权限 |
 | V2 | 三角色分化（admin / worker / viewer）— 预设计，不在 V1 实施 |
+
+### Field Semantics & Business Boundary
+
+- **`orders.order_no`**：工厂订单编号（同时作为生产编号使用，如 `R45981`）。系统内无独立的「生产编号」字段。
+- **颜色类信息（电镀颜色、板底颜色等）不属于订单创建字段**：一个订单可能包含多个颜色组合，订单基础信息无法准确表达；颜色、纹理、窗口、工艺特征等生产属性，后续由客户订单资料/图纸解析模块维护。
 
 ---
 

@@ -6,3 +6,6 @@ supabase/.temp/
 __pycache__/
 ~$*
 .claude/settings.local.json
+# Temporary local test tools — not for git
+mock-recognize-server.js
+serve.js

@@ -32,5 +32,21 @@ const CustomersAPI = (() => {
     return customer.short_name || customer.name || '—';
   }
 
-  return { list, search, displayName };
+  /**
+   * Exact-match a recognized customer name against the cached list.
+   * Matches name / short_name / code, case-insensitive. No fuzzy guessing —
+   * returns null when nothing matches exactly (caller leaves the field empty).
+   */
+  function match(customerList, rawName) {
+    if (!rawName || !customerList || customerList.length === 0) return null;
+    const q = String(rawName).trim().toLowerCase();
+    if (!q) return null;
+    return customerList.find(c =>
+      (c.name && String(c.name).trim().toLowerCase() === q) ||
+      (c.short_name && String(c.short_name).trim().toLowerCase() === q) ||
+      (c.code && String(c.code).trim().toLowerCase() === q)
+    ) || null;
+  }
+
+  return { list, search, displayName, match };
 })();

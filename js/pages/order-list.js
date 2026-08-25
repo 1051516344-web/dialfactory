@@ -248,7 +248,6 @@ const OrderListPage = (() => {
   function renderOrderCard(order) {
     const s = order.stats || {};
     const specText = [order.base_texture, order.plate_color, order.specs?.base_plate_color].filter(Boolean).join('+') || '—';
-    const prodNo = order.specs?.production_no || '';
     const custOrderNo = order.specs?.customer_order_no || '';
     const warningHtml = s.isStalled
       ? `<div class="order-card-warning stalled">⚠ ${escapeHTML(s.currentNode?.dept_name || '')}${escapeHTML(s.currentNode?.process_name || '')} · ${Format.stalledSince(s.currentNode?.updated_at)}</div>`
@@ -270,7 +269,6 @@ const OrderListPage = (() => {
       <div class="card order-card" onclick="Router.navigate('/orders/${order.id}')">
         <div class="order-card-header">
           <span class="order-card-order-no">#${escapeHTML(order.order_no)}</span>
-          ${prodNo ? `<span style="font-size:var(--font-size-xs);color:var(--color-primary);font-weight:500;">${escapeHTML(prodNo)}</span>` : ''}
           <span class="order-card-customer">${escapeHTML(order.customer?.short_name || order.customer?.name || '—')}</span>
           ${custOrderNo ? `<span style="font-size:var(--font-size-xs);color:var(--text-secondary);">客单: ${escapeHTML(custOrderNo)}</span>` : ''}
           ${StatusBadge.render(derivedStatus)}

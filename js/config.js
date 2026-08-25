@@ -7,6 +7,10 @@ const CONFIG = {
   SUPABASE_URL: 'https://wzfkmwrqnvjegunjueka.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6Zmttd3JxbnZqZWd1bmp1ZWthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5ODExNTksImV4cCI6MjEwMTU1NzE1OX0.Y8IVY-epnh_0gBpumzyDSy6W8mEtVX8mrwd4ExngL2M',
 
+  // Order image recognition (Phase 1: local extract endpoint)
+  // Phase 2: point this at a Supabase Edge Function — no page code changes.
+  RECOGNIZE_URL: 'http://localhost:3100/api/extract',
+
   // Business
   STALL_DAYS: 3,
   UNDO_WINDOW_MINUTES: 5,
