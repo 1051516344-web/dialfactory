@@ -81,11 +81,6 @@ const DashboardPage = (() => {
           <div class="kpi-value" style="color:#0F172A;">${d.todayActiveProcesses}</div>
           <div class="kpi-subtitle">活跃工序类型</div>
         </div>
-        <div class="kpi-card">
-          <div class="kpi-label">已取消订单</div>
-          <div class="kpi-value" style="color:#6B7280;">${d.cancelledOrders ?? 0}</div>
-          <div class="kpi-subtitle">取消总数</div>
-        </div>
       </div>
     `;
   }
