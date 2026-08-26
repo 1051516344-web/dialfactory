@@ -9,7 +9,7 @@ const CONFIG = {
 
   // Order image recognition (Phase 1: local extract endpoint)
   // Phase 2: point this at a Supabase Edge Function — no page code changes.
-  RECOGNIZE_URL: 'http://localhost:3100/api/extract',
+  RECOGNIZE_URL: 'https://wzfkmwrqnvjegunjueka.supabase.co/functions/v1/recognize-order',
 
   // Business
   STALL_DAYS: 3,

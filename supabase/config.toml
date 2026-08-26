@@ -385,6 +385,11 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# 订单图片识别 Edge Function：公网可调（移动端/平板），关闭 JWT 校验。
+# 第一阶段按约束不加鉴权；后续如需堵公网滥用再改回 verify_jwt = true 并让前端补 Authorization 头。
+[functions.recognize-order]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
