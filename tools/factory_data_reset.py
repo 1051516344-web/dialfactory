@@ -87,9 +87,9 @@ for name in ['制一','制二','制三','制四','总QC']:
     print(f"    {name}: {'OK' if name in dept_map else 'MISSING!'}")
 
 # ============================================================
-# Step 3: Insert real customers (16)
+# Step 3: Insert real customers (18)
 # ============================================================
-print("\n=== Step 3: Insert 16 real customers ===")
+print("\n=== Step 3: Insert 18 real customers ===")
 CUSTOMERS = [
     ("ACC", "ACCENDO HONG KONG LTD", True),
     ("ATT", "艺时香港有限公司", True),
@@ -101,12 +101,13 @@ CUSTOMERS = [
     ("TEL", "晶宝电子有限公司", True),
     ("WEL", "三井表业有限公司", True),
     ("THA", "深圳市金辰宇科技有限公司", True),
+    ("TIF", "TIF(待确认)", True),
     ("GLB", "东莞高宝精密钟表制品有限公司", True),
     ("PYX", "长安翡仕实业有限公司", False),
     ("APW", "东莞亚太表业有限公司", True),
     ("JIP", "钦州金泰精密制造有限公司", True),
     ("CES", "格致", True),
-    # 16th placeholder
+    ("SHY", "SHY(待确认)", True),
     ("HKG", "香港钟表(待确认)", True),
 ]
 cust_rows = [{"name": n, "code": c, "is_active": a} for c, n, a in CUSTOMERS]
@@ -184,7 +185,7 @@ for t in ["departments","customers","processes","process_routes","route_steps","
     after[t] = count(t)
     status = "OK" if (
         (t == "departments" and after[t] == 5) or
-        (t == "customers" and after[t] == 16) or
+        (t == "customers" and after[t] == 18) or
         (t == "processes" and after[t] == 35) or
         (t in ["process_routes","route_steps","orders","order_nodes","exception_events"] and after[t] == 0)
     ) else "CHECK!"
