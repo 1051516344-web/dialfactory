@@ -57,10 +57,13 @@ const OrderCreatePage = (() => {
   // Step 1: Basic Info
   // ==========================================================
   function renderStep1(container, customers) {
+    // 客户字段：OCR 未匹配到档案时，保留 OCR 原文为「未建档」选项，绝不丢弃。
+    const unmatchedName = (formData.customer_name && !formData.customer_id) ? formData.customer_name : '';
     const custOptions = customers.length > 0
-      ? '<option value="" ' + (formData.customer_id ? '' : 'selected') + '>请选择客户</option>' +
+      ? '<option value="" ' + (!formData.customer_id && !unmatchedName ? 'selected' : '') + '>请选择客户</option>' +
+        (unmatchedName ? `<option value="__unmatched__" selected>${escapeHTML(unmatchedName)}（未建档）</option>` : '') +
         customers.map(c => `<option value="${c.id}" ${formData.customer_id === c.id ? 'selected' : ''}>${escapeHTML(c.short_name || c.name)}</option>`).join('')
-      : '<option value="">— 暂无客户数据，可手动输入 —</option>';
+      : '';
 
     const texSuggestions = CONFIG.TEXTURE_SUGGESTIONS.map(t => `<option value="${t}">`).join('');
 
@@ -85,7 +88,7 @@ const OrderCreatePage = (() => {
           <label class="form-label">客户 *</label>
           ${customers.length > 0
             ? `<select id="form-customer" class="form-select">${custOptions}</select>`
-            : `<input type="text" id="form-customer-text" class="form-input" placeholder="输入客户名称">`
+            : `<input type="text" id="form-customer-text" class="form-input" placeholder="输入客户名称" value="${escapeHTML(formData.customer_name || '')}">`
           }
         </div>
 
@@ -148,8 +151,20 @@ const OrderCreatePage = (() => {
     formData.source      = 'manual';
 
     const custSelect = document.getElementById('form-customer');
+    const custText = document.getElementById('form-customer-text');
     if (custSelect) {
-      formData.customer_id = custSelect.value || null;
+      const val = custSelect.value || '';
+      if (val === '__unmatched__') {
+        // 未建档客户：customer_id 为空，保留 OCR 原文 customer_name
+        formData.customer_id = null;
+      } else {
+        formData.customer_id = val || null;
+        // 手动选了已建档客户 → 清除 OCR-only 原始文本
+        if (formData.customer_id) formData.customer_name = '';
+      }
+    } else if (custText) {
+      formData.customer_id = null;
+      formData.customer_name = custText.value.trim();
     } else {
       formData.customer_id = null;
     }
@@ -326,14 +341,21 @@ const OrderCreatePage = (() => {
     formData.due_date = due || formData.due_date || '';
     formData.base_texture = r.base_texture || formData.base_texture || '';
     formData.order_no = r.order_no || formData.order_no || '';
-    formData.customer_id = customer ? customer.id : (formData.customer_id || null);
+
+    // 客户：customer_name（OCR 原文）与 customer_id（档案匹配）彻底解耦。
+    // 匹配失败绝不丢弃 OCR 原文 —— customer_name 保留，customer_id 置空。
+    if (r.customer_name) {
+      formData.customer_name = r.customer_name;
+      formData.customer_id = customer ? customer.id : null;
+    }
+
     formData.order_quantity_raw = r.order_quantity || null;
 
     recognitionDone = true;
     renderStep1(document.getElementById('page-container'), customerList);
 
     if (r.customer_name && !customer) {
-      Toast.warning('未匹配到客户「' + r.customer_name + '」，请手动选择');
+      Toast.warning('未匹配到客户档案「' + r.customer_name + '」，已保留 OCR 原文');
     }
   }
 
