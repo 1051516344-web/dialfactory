@@ -7,10 +7,12 @@ const CONFIG = {
   SUPABASE_URL: 'https://wzfkmwrqnvjegunjueka.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6Zmttd3JxbnZqZWd1bmp1ZWthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5ODExNTksImV4cCI6MjEwMTU1NzE1OX0.Y8IVY-epnh_0gBpumzyDSy6W8mEtVX8mrwd4ExngL2M',
 
-  // Order image recognition — 现在指向本地阿里云 OCR 服务（drawing-analyze-server）。
-  // 备用（Vision 模型 Edge Function，切回时改回这一行即可）：
+  // Order image recognition — 现在指向公网阿里云 OCR Edge Function（recognize-order-ocr）。
+  // 备用（本地 OCR 服务，切回时改回这一行即可）：
+  //   http://localhost:3200/api/extract
+  // 备用（Vision 模型 Edge Function）：
   //   https://wzfkmwrqnvjegunjueka.supabase.co/functions/v1/recognize-order
-  RECOGNIZE_URL: 'http://localhost:3200/api/extract',
+  RECOGNIZE_URL: 'https://wzfkmwrqnvjegunjueka.supabase.co/functions/v1/recognize-order-ocr',
 
   // Business
   STALL_DAYS: 3,
