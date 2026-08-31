@@ -144,5 +144,98 @@ const RouteTemplatesAPI = (() => {
     );
   }
 
-  return { saveRouteTemplate, list, getById, updateName, buildSignature };
+  /**
+   * Manually save an order route as a NEW template (explicit user action).
+   * No auto name generation, no used_count increment, no dedup-by-increment.
+   * Rejects if a template with the same route_signature already exists.
+   *
+   * @param {string} name - user-chosen template name
+   * @param {Array} processList - [{ order, process, department }, ...]
+   * @param {string} sourceOrderId - order the route was saved from (bookkeeping only)
+   * @returns { ok, data } | { ok:false, error }
+   */
+  async function createTemplate(name, processList, sourceOrderId) {
+    if (!name || !name.trim()) {
+      return { ok: false, error: '请输入模板名称' };
+    }
+    if (!processList || processList.length === 0) {
+      return { ok: false, error: 'Empty process list' };
+    }
+
+    const routeSignature = buildSignature(processList);
+
+    // Dedup by route_signature (unique index) — reject identical route
+    const { ok, data: existing } = await DB.call(
+      DB.get().from('process_route_templates')
+        .select('id, template_name')
+        .eq('route_signature', routeSignature)
+        .maybeSingle()
+    );
+    if (ok && existing) {
+      return { ok: false, error: '该路线已保存为模板：' + (existing.template_name || '—') };
+    }
+
+    return DB.call(
+      DB.get().from('process_route_templates')
+        .insert({
+          template_name: name.trim(),
+          route_signature: routeSignature,
+          process_list: processList,
+          process_count: processList.length,
+          used_count: 0,
+          associated_orders: sourceOrderId ? [sourceOrderId] : [],
+          last_used_at: new Date().toISOString()
+        })
+        .select().single()
+    );
+  }
+
+  /**
+   * Update a template's process list (route edit via checkbox).
+   * Recomputes route_signature + process_count.
+   * Rejects if the new route collides with ANOTHER template (excluding self).
+   */
+  async function updateProcesses(id, processList) {
+    if (!id) return { ok: false, error: '缺少模板ID' };
+    if (!processList || processList.length === 0) {
+      return { ok: false, error: '模板至少需要一道工序' };
+    }
+
+    const routeSignature = buildSignature(processList);
+
+    const { ok, data: existing } = await DB.call(
+      DB.get().from('process_route_templates')
+        .select('id, template_name')
+        .eq('route_signature', routeSignature)
+        .neq('id', id)
+        .maybeSingle()
+    );
+    if (ok && existing) {
+      return { ok: false, error: '该路线已保存为模板：' + (existing.template_name || '—') };
+    }
+
+    return DB.call(
+      DB.get().from('process_route_templates')
+        .update({
+          route_signature: routeSignature,
+          process_list: processList,
+          process_count: processList.length,
+          last_used_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select().single()
+    );
+  }
+
+  /**
+   * Delete a template.
+   */
+  async function deleteTemplate(id) {
+    if (!id) return { ok: false, error: '缺少模板ID' };
+    return DB.call(
+      DB.get().from('process_route_templates').delete().eq('id', id)
+    );
+  }
+
+  return { saveRouteTemplate, list, getById, updateName, buildSignature, createTemplate, updateProcesses, deleteTemplate };
 })();

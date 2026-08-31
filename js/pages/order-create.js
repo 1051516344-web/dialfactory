@@ -380,25 +380,6 @@ const OrderCreatePage = (() => {
           }
         }
 
-        // Phase 4: Auto-save route template (non-blocking — failure does not affect order creation)
-        try {
-          const templateProcessList = selectedSteps
-            .filter(s => s.selected)
-            .map((s, i) => ({
-              order: i + 1,
-              process: s.process_name,
-              department: s.dept_name
-            }));
-          if (templateProcessList.length > 0) {
-            const rtResult = await RouteTemplatesAPI.saveRouteTemplate(templateProcessList, result.orderId);
-            if (!rtResult.ok) {
-              console.warn('[OrderCreate] Route template save failed:', rtResult.error);
-            }
-          }
-        } catch (e) {
-          console.warn('[OrderCreate] Route template save error:', e);
-        }
-
         Router.navigate('/orders/' + result.orderId);
       } else {
         alert(result.error || '创建失败，请重试');

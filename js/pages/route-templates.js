@@ -6,6 +6,8 @@
 
 const RouteTemplatesPage = (() => {
 
+  let templatesCache = []; // current template list (for edit/delete handlers)
+
   async function render() {
     const container = document.getElementById('page-container');
     if (!container) return;
@@ -31,6 +33,7 @@ const RouteTemplatesPage = (() => {
     }
 
     const templates = result.data || [];
+    templatesCache = templates;
 
     if (templates.length === 0) {
       container.innerHTML = `
@@ -90,6 +93,8 @@ const RouteTemplatesPage = (() => {
               <span class="tpl-used-label">次使用</span>
             </div>
             <div class="tpl-col-time">${formatDate(t.last_used_at)}</div>
+            <button class="btn btn-ghost btn-sm" onclick="RouteTemplatesPage.onEditProcesses('${t.id}')">编辑工序</button>
+            <button class="btn btn-danger btn-sm" onclick="RouteTemplatesPage.onDelete('${t.id}')">删除</button>
             <button class="tpl-row-toggle" data-id="${tplId}">▼</button>
           </div>
           <div class="tpl-row-detail" id="tpl-detail-${tplId}" style="display:none;">
@@ -211,5 +216,80 @@ const RouteTemplatesPage = (() => {
     return DOM.escapeHtml(str);
   }
 
-  return { render };
+  async function onEditProcesses(templateId) {
+    const template = templatesCache.find(t => t.id === templateId);
+    if (!template) return;
+
+    const { ok, data: processes } = await ProcessesAPI.listProcesses();
+    if (!ok || !processes) { Toast.error('无法加载工序列表'); return; }
+
+    // Pre-check the template's current processes (match by process name).
+    // Preserve existing department labels when a process is already in the template.
+    const currentNames = new Set((template.process_list || []).map(p => p.process));
+    const existingDept = {};
+    (template.process_list || []).forEach(p => { existingDept[p.process] = p.department; });
+
+    const checkboxes = processes.map(p => {
+      const checked = currentNames.has(p.name) ? 'checked' : '';
+      return `<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:0.85rem;cursor:pointer;">
+        <input type="checkbox" name="proc" value="${p.id}" ${checked} style="cursor:pointer;">
+        <span>${escapeHTML(p.code)} ${escapeHTML(p.name)}</span>
+      </label>`;
+    }).join('');
+
+    ConfirmDialog.show({
+      title: '编辑模板工序 — ' + (template.template_name || template.route_signature || ''),
+      content: `<div style="max-height:340px;overflow-y:auto;">${checkboxes}</div>`,
+      confirmLabel: '保存',
+      onConfirm: async () => {
+        // Read checked boxes directly (ConfirmDialog's naive form collection can't
+        // represent multiple same-name checkboxes). DOM order = catalog order.
+        const checkedEls = document.querySelectorAll('.dialog-overlay input[name="proc"]:checked');
+        const ordered = Array.from(checkedEls).map((el, i) => {
+          const p = processes.find(x => x.id === el.value);
+          if (!p) return null;
+          return {
+            order: i + 1,
+            process: p.name,
+            department: existingDept[p.name] !== undefined
+              ? existingDept[p.name]
+              : (p.default_dept ? p.default_dept.name : '')
+          };
+        }).filter(Boolean);
+
+        if (ordered.length === 0) { Toast.error('请至少选择一道工序'); return; }
+
+        const result = await RouteTemplatesAPI.updateProcesses(template.id, ordered);
+        if (result.ok) {
+          Toast.success('模板工序已更新');
+          render();
+        } else {
+          Toast.error(result.error || '保存失败');
+        }
+      }
+    });
+  }
+
+  function onDelete(templateId) {
+    const template = templatesCache.find(t => t.id === templateId);
+    if (!template) return;
+    ConfirmDialog.show({
+      title: '删除模板',
+      content: `<p>确认删除模板 <strong>${escapeHTML(template.template_name || template.route_signature || '—')}</strong>？</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">删除后不影响任何已创建订单的路线。</p>`,
+      confirmLabel: '确认删除',
+      dangerous: true,
+      onConfirm: async () => {
+        const result = await RouteTemplatesAPI.deleteTemplate(template.id);
+        if (result.ok) {
+          Toast.success('模板已删除');
+          render();
+        } else {
+          Toast.error(result.error || '删除失败');
+        }
+      }
+    });
+  }
+
+  return { render, onEditProcesses, onDelete };
 })();

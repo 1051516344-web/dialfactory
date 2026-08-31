@@ -108,7 +108,10 @@ const OrderDetailPage = (() => {
       </div>
 
       <div id="order-flow-section">
-        <div class="section-title" style="margin-top:var(--space-lg);">生产流程</div>
+        <div class="section-title" style="margin-top:var(--space-lg);display:flex;align-items:center;gap:var(--space-sm);">
+          <span>生产流程</span>
+          ${nodes.length > 0 ? `<button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="OrderDetailPage.onSaveAsTemplate()">保存为模板路线</button>` : ''}
+        </div>
         ${nodes.length === 0
           ? EmptyState.render({ icon: '📋', title: '暂无工序节点', desc: '该订单尚未生成工序执行记录。' })
           : renderFlow(nodes, excByNode)
@@ -1011,5 +1014,51 @@ const OrderDetailPage = (() => {
     });
   }
 
-  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog };
+  // ==========================================================
+  // Save current order route as a template (explicit user action)
+  // ==========================================================
+  async function onSaveAsTemplate() {
+    if (!currentOrder || !currentNodeList || currentNodeList.length === 0) return;
+
+    // Build route from current nodes: sort by seq, dedup by process_name
+    // (skip rework duplicates so the template holds the canonical route).
+    const sorted = [...currentNodeList].sort((a, b) => a.seq - b.seq);
+    const seen = new Set();
+    const route = [];
+    for (const n of sorted) {
+      const name = (n.process_name || '').trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      route.push({ process: name, department: n.dept_name || '' });
+    }
+    if (route.length === 0) { Toast.error('当前订单没有可保存的工序'); return; }
+
+    ConfirmDialog.show({
+      title: '保存为模板路线',
+      content: `
+        <p style="font-size:var(--font-size-sm);color:var(--text-secondary);">将当前订单的 ${route.length} 道工序保存为新模板：</p>
+        <p style="font-size:var(--font-size-sm);margin:var(--space-sm) 0;line-height:1.6;">
+          ${route.map((r, i) => (i + 1) + '. ' + escapeHTML(r.process)).join(' → ')}
+        </p>
+        <div class="form-group">
+          <label class="form-label">模板名称 *</label>
+          <input type="text" name="name" class="form-input" placeholder="如 普通油压面" autofocus>
+        </div>
+      `,
+      confirmLabel: '保存',
+      onConfirm: async (data) => {
+        const name = (data.name || '').trim();
+        if (!name) { Toast.error('请输入模板名称'); return; }
+        const processList = route.map((r, i) => ({ order: i + 1, process: r.process, department: r.department }));
+        const result = await RouteTemplatesAPI.createTemplate(name, processList, currentOrder.id);
+        if (result.ok) {
+          Toast.success('已保存为模板：' + name);
+        } else {
+          Toast.error(result.error || '保存失败');
+        }
+      }
+    });
+  }
+
+  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog, onSaveAsTemplate };
 })();
