@@ -55,16 +55,37 @@ function isBoundary(t) {
 /* ---------- 字段标签判定（normalize 后 contains 匹配） ---------- */
 function isOrderNumberLabel(t) {
   if (t.includes('订单号') || t.includes('订单编号')) return true;
+  // S01：图纸上写的是繁体「訂單號碼：（值 INT-7087）」，旧规则只认简体 → 整个客户单号字段落空
+  if (t.includes('訂單號碼') || t.includes('訂單編號') || t.includes('訂單號')) return true;
   return /(order\s*no|^po$|pono|p\.o\.)/i.test(t);
 }
+// S01：客户单号值允许带连字符（样本值 INT-7087）——仅用于在已有候选里优先挑选，不排斥其他写法
+const ORDER_NO_VALUE_RE = /^[A-Za-z]{1,6}[-/]?\d{3,}$/;
 function isOrderQuantityLabel(t) {
   if (t.includes('订单数量')) return true;
+  // S01：数量标签同样可能写成繁体「訂製数量 / 訂單数量 / 數量」
+  if (t.includes('訂製数量') || t.includes('訂單数量') || t.includes('订制数量')) return true;
   if (t.includes('数量') && !t.includes('粗胚') && !t.includes('壳')) return true;
+  if (t.includes('數量') && !t.includes('粗胚') && !t.includes('殼')) return true;
   return /(qty|pcs)/i.test(t);
 }
+// S01：容差数量写法「101+4%」（主数字 101 给 order_qty，原文整串保留回传由前端解析）
+const QTY_TOL_RE = /^\d+(?:\.\d+)?\s*[+＋]\s*\d+(?:\.\d+)?\s*%?$/;
 function isDeliveryLabel(t) {
   return t.includes('交货日期') || t.includes('交期') || t.includes('交货')
+    // S01：交期标签为繁体「交貨日期：」
+    || t.includes('交貨日期') || t.includes('交貨')
     || /(delivery|date)/i.test(t);
+}
+// S01：日期归一化 —— 「2026年09月02日」/「2026/9/2」/「2026.09.02」/「2026-09-02」→ YYYY-MM-DD
+function normalizeDateToISO(text) {
+  if (!text) return '';
+  const m = String(text).match(/(\d{4})\s*[年\-\/.]\s*(\d{1,2})\s*[月\-\/.]\s*(\d{1,2})\s*日?/);
+  if (!m) return '';
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return '';
+  return `${m[1]}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 function isProductionLabel(t) {
   return t.includes('生产编号') || t.includes('生产') || t.includes('型号')
@@ -168,11 +189,15 @@ export function extractOrderNumber(words) {
   }
   orderNumberCandidates.sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
 
-  const orderNumberJoined = joinRealOrderNumbers(primary, orderNumberCandidates);
+  // S01：值允许带连字符（样本 INT-7087）——候选中若存在「字母+数字」形态的单号，优先采用它，
+  //      候选集合与几何取值逻辑均不变
+  const shaped = candidates.find((w) => ORDER_NO_VALUE_RE.test(normalize(w.word))) || null;
+  const chosen = shaped || primary;
+  const orderNumberJoined = joinRealOrderNumbers(chosen, orderNumberCandidates);
 
   return {
-    value: primary ? primary.word : '',
-    found: !!primary,
+    value: chosen ? chosen.word : '',
+    found: !!chosen,
     source: 'label',
     label: label.word,
     candidates: wordsToStr(candidates),
@@ -256,12 +281,36 @@ export function extractCustomerName(words, prodWord) {
   };
 }
 
-/* ---------- 4. 交货日期（内联「交货日期：/交期：」优先，标签+值兜底） ---------- */
+/* ---------- 4. 交货日期（内联「交货日期：/交期：」优先，标签+值兜底，日期样式兜底） ---------- */
+/* S01：按「日期样式」全表收集候选；给了标签就按与标签的中线距离排序 */
+function collectDateLikeWords(words, label) {
+  const lcy = label ? centerY(label) : null;
+  const all = [];
+  for (const w of words) {
+    const iso = normalizeDateToISO(w.word);
+    if (!iso) continue;
+    all.push({ raw: String(w.word), iso, dist: lcy == null ? Number(w.y) : Math.abs(centerY(w) - lcy) });
+  }
+  all.sort((a, b) => a.dist - b.dist);
+  const seen = new Set();
+  const uniq = [];
+  for (const x of all) {
+    if (seen.has(x.iso)) continue;
+    seen.add(x.iso);
+    uniq.push(x);
+  }
+  return uniq;
+}
+
 export function extractDeliveryDate(words) {
   const inline = [];
   for (const w of words) {
-    const m = String(w.word).match(/(?:交货日期|交期)\s*[:：]\s*(.+)/);
-    if (m && m[1].trim()) inline.push({ word: w, value: m[1].trim() });
+    // S01：标签与值写在同一个词里时，兼容繁体标签与中文年月日
+    const m = String(w.word).match(/(?:交货日期|交貨日期|交期|交货|交貨)\s*[:：]\s*(.+)/);
+    if (m && m[1].trim()) {
+      const raw = m[1].trim();
+      inline.push({ word: w, value: normalizeDateToISO(raw) || raw });
+    }
   }
   if (inline.length) {
     inline.sort((a, b) => a.word.y - b.word.y);
@@ -270,13 +319,28 @@ export function extractDeliveryDate(words) {
   const label = words.find((w) => isDeliveryLabel(normalize(w.word)));
   if (label) {
     const { rightCands, belowCands, primary, sameLine } = pickValue(words, label);
-    return {
-      value: primary ? primary.word : '',
-      found: !!primary,
-      source: 'label',
-      candidates: wordsToStr(rightCands.length ? rightCands : belowCands),
-      ambiguous: sameLine >= 2,
-    };
+    if (primary) {
+      const raw = primary.word;
+      return {
+        value: normalizeDateToISO(raw) || raw,
+        found: true,
+        source: 'label',
+        candidates: wordsToStr(rightCands.length ? rightCands : belowCands),
+        ambiguous: sameLine >= 2,
+      };
+    }
+    // S01：「2026年09月02日」与「交貨日期：」的横向间距超出 RIGHT_MAX 取窗，几何取值落空 →
+    //      退回按日期样式扫描，取离交期标签最近的一个日期，输出 YYYY-MM-DD
+    const byDate = collectDateLikeWords(words, label);
+    if (byDate.length) {
+      return { value: byDate[0].iso, found: true, source: 'date-pattern', candidates: byDate.map((x) => x.raw) };
+    }
+    return { value: '', found: false, source: 'label', candidates: [], ambiguous: sameLine >= 2 };
+  }
+  // S01：标签为繁体、旧规则完全找不到标签时，也兜底扫一次日期样式
+  const onlyDate = collectDateLikeWords(words, null);
+  if (onlyDate.length) {
+    return { value: onlyDate[0].iso, found: true, source: 'date-pattern', candidates: onlyDate.map((x) => x.raw) };
   }
   return { value: '', found: false, source: 'none', reason: '未找到「交货日期/交期」', candidates: [] };
 }
@@ -289,9 +353,35 @@ export function extractOrderQuantity(words) {
   }
   const { rightCands, belowCands, primary, sameLine } = pickValue(words, label);
   const candidates = rightCands.length ? rightCands : belowCands;
+  if (primary) {
+    return {
+      value: primary.word,
+      found: true,
+      source: 'label',
+      label: label.word,
+      candidates: wordsToStr(candidates),
+      ambiguous: sameLine >= 2,
+    };
+  }
+  // S01：样本数量写作容差形式「101+4%」，且与「訂製数量：」的横向间距超出取窗，几何取值落空 →
+  //      按容差样式扫描，取离数量标签最近的一个，原文整串回传（主数字 101 由前端解析进 order_qty）
+  const tol = words
+    .filter((w) => QTY_TOL_RE.test(normalize(w.word)))
+    .map((w) => ({ w, dist: Math.abs(centerY(w) - centerY(label)) }))
+    .sort((a, b) => a.dist - b.dist);
+  if (tol.length) {
+    return {
+      value: tol[0].w.word,
+      found: true,
+      source: 'qty-pattern',
+      label: label.word,
+      candidates: tol.map((x) => x.w.word),
+      ambiguous: false,
+    };
+  }
   return {
-    value: primary ? primary.word : '',
-    found: !!primary,
+    value: '',
+    found: false,
     source: 'label',
     label: label.word,
     candidates: wordsToStr(candidates),

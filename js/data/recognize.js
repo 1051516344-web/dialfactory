@@ -39,7 +39,11 @@ const RecognizeAPI = (() => {
       });
 
       if (!res.ok) {
-        return { ok: false, error: '识别服务返回 ' + res.status };
+        // 读取失败响应体：Edge Function 在 4xx/5xx 时会回 { error: "..." }，
+        // 把具体原因带出来（否则界面只剩“识别服务返回 500”，无法定位）
+        let detail = '';
+        try { detail = (await res.json())?.error || ''; } catch (_e) {}
+        return { ok: false, error: '识别服务返回 ' + res.status + (detail ? '：' + detail : '') };
       }
 
       const json = await res.json();
