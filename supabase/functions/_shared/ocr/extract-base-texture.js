@@ -18,7 +18,9 @@ export function normalize(s) {
 }
 
 /* ---------- 2. 标签 / 排除词（normalize 后 contains 匹配） ---------- */
-const LABEL_PATTERNS = ['底纹', '底质', '底砂'];
+// S01 修复：补繁体「底質 / 底紋」。样本 S01 图纸写的是繁体「底質處理：」，
+// 原先只认简体，导致真标签漏判，而含「无底纹」的值块被子串误判成标签。
+const LABEL_PATTERNS = ['底纹', '底质', '底砂', '底質', '底紋'];
 export function isTextureLabelWord(word) {
   const t = normalize(word);
   return LABEL_PATTERNS.some((p) => t.includes(p));
@@ -129,7 +131,12 @@ function collectVerticalRightColumn(words, label, opts) {
     const wBottom = w.y + w.height;
     const wLeft = w.x;
     const toRight = wLeft >= labelRight - 0.3 * h;
-    const yNear = Math.abs((wTop + wBottom) / 2 - labelCenterY) <= 0.5 * label.height;
+    // S01 修复：容忍窗改为「字号基准 + 标签高度上限」。
+    // 原为纯 0.5*label.height：标签被错认成长值块时（S01 为 286px）会撑到 ±143px，把远距离备注扫进来。
+    // 上限取 2.0*h（h = 竖排字号 = label.width）：常见 4 字标签下 0.5*label.height ≈ 2.0*h 行为不变；
+    // 超长「标签」则被收紧（S01 误判场景下 ±40px，仍排除中心距 85/100px 的备注）。
+    const yTol = Math.min(0.5 * label.height, 2.0 * h);
+    const yNear = Math.abs((wTop + wBottom) / 2 - labelCenterY) <= yTol;
     if (toRight && yNear && !isBoundaryLabelWord(w.word)) {
       candidates.push(w);
     }
@@ -195,10 +202,46 @@ function collectCandidates(words, label, opts) {
   return { below: belowFirstLine, right: rightAll };
 }
 
+/* ---------- 5b. S01 修复：标签选取加「形态」约束 ---------- */
+/* 原先盲取 labels[0]：当值块自身含「底纹」时（S01 的「…/D无底纹」）会被当成标签，
+   其超长 height 又把竖排容忍窗撑大，最终扫入旁边备注。这里按形态优先挑真标签。 */
+function pickTextureLabel(labels, warnings) {
+  if (!labels || labels.length === 0) return null;
+
+  // 1) 最优先：以「处理 / 處理」结尾（真标签的典型形态）
+  const withProcess = labels.filter((w) => /(处理|處理)[:：]?$/.test(normalize(w.word)));
+  if (withProcess.length) {
+    // 同为「处理」结尾时取最短的一个，避免把「喷砂处理」这类长值当作标签
+    return withProcess.slice().sort(
+      (a, b) => Math.max(a.width || 0, a.height || 0) - Math.max(b.width || 0, b.height || 0),
+    )[0];
+  }
+
+  // 2) 其次：同 x 列内有明显更短的候选（值块通常远长于标签）
+  const ref = labels[0];
+  const colTol = 0.6 * Math.max(ref.width || 1, 1);
+  const column = labels.filter((w) => Math.abs(w.x - ref.x) <= colTol);
+  if (column.length >= 2) {
+    const byLen = column.slice().sort(
+      (a, b) => Math.max(a.width || 0, a.height || 0) - Math.max(b.width || 0, b.height || 0),
+    );
+    const shortest = Math.max(byLen[0].width || 0, byLen[0].height || 0);
+    const next = Math.max(byLen[1].width || 0, byLen[1].height || 0);
+    if (shortest < next) return byLen[0];
+  }
+
+  // 3) 兜底：退回 labels[0]，并记一条 warning（仅随 debug 返回，不影响字段值）
+  if (warnings) {
+    warnings.push('base_texture: 标签候选未命中形态规则，按原顺序回退 labels[0]=' + labels[0].word);
+  }
+  return labels[0];
+}
+
 /* ---------- 6. 核心规则 ---------- */
 export function extractBaseTextureRaw(input, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
   const words = normalizeWords(input);
+  const labelWarnings = [];   // S01 修复：标签选取告警，随 debug 返回
 
   const labels = words.filter((w) => isTextureLabelWord(w.word));
   if (labels.length === 0) {
@@ -214,11 +257,12 @@ export function extractBaseTextureRaw(input, options) {
       below_words: [],
       right_words: [],
       all_candidates: [],
-      debug: { labelCount: 0, candidateCount: 0, belowCount: 0, rightCount: 0, sourceIsBelow: false, options: opts },
+      debug: { labelCount: 0, candidateCount: 0, belowCount: 0, rightCount: 0, sourceIsBelow: false, options: opts, labelWarnings },
     };
   }
 
-  const label = mergeLabelFragments(words, labels[0]);
+  // S01 修复：不再盲取 labels[0]，改为按「形态」挑选标签（见 pickTextureLabel）
+  const label = mergeLabelFragments(words, pickTextureLabel(labels, labelWarnings));
   const isVertical = isVerticalLabel(label);
   const h = effectiveFontSize(label);
   const labelText = label.words.map((w) => w.word).join('');
@@ -293,6 +337,7 @@ export function extractBaseTextureRaw(input, options) {
       sourceInline,
       isVertical,
       options: opts,
+      labelWarnings,
     },
   };
 }
