@@ -14,7 +14,7 @@ const RecognizeAPI = (() => {
    * Send an order image to the recognition service.
    * @param {File} file — order image (PNG / JPG)
    * @returns { ok, data:{ customer_name, customer_order_no, order_no,
-   *                       base_texture, delivery_date, order_quantity } }
+   *                       delivery_date, order_quantity } }
    *        | { ok:false, error }
    */
   async function extract(file) {

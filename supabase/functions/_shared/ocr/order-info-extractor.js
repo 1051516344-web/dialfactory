@@ -2,20 +2,21 @@
    DialFactory OCR Edge Function · 订单信息提取器（order-info-extractor）
 
    从 aliyun-ocr-test/order-info-extractor.js 逐字移植（CommonJS → ESM）。
-   用「OCR 坐标定位 + 几何规则」替代 Vision 模型，识别 6 个订单字段：
+   用「OCR 坐标定位 + 几何规则」替代 Vision 模型，识别 5 个订单字段：
      order_number        订单编号（客户 PO）
      production_number   生产编号（R / SA / SH 开头）
      customer_name       客户名称（生产编号同行左侧纯英文短代号）
      delivery_date       交货日期
      order_quantity      订单数量
-     base_texture        底纹处理（复用 extract-base-texture + texture-normalizer）
 
    仅保留纯函数部分，删除 CLI / fs / path / process。
    识别规则、容差常量与 localhost:3200 版本完全一致，不改任何逻辑。
+
+   注：底纹（base_texture）已按业务决定停用，本文件不再提取该字段。
+   extract-base-texture.js / texture-normalizer.js 仍保留在仓库中（此文件不再调用）。
    ============================================================ */
 
-import { normalizeWords, normalize, extractBaseTextureRaw } from './extract-base-texture.js';
-import { parseBaseTexture } from './texture-normalizer.js';
+import { normalizeWords, normalize } from './extract-base-texture.js';
 
 /* ---------- 几何基础 ---------- */
 function isVerticalBox(w) {
@@ -400,17 +401,6 @@ export function extractOrderInfo(input) {
   const dd = extractDeliveryDate(words);
   const oq = extractOrderQuantity(words);
 
-  let baseTexture = { raw: '', candidates: [] };
-  try {
-    const bt = extractBaseTextureRaw(input);
-    if (bt && bt.found && bt.base_texture_raw) {
-      const norm = parseBaseTexture(bt.base_texture_raw);
-      baseTexture = { raw: bt.base_texture_raw, candidates: (norm && norm.candidates) || [] };
-    }
-  } catch (e) {
-    warnings.push('base_texture: ' + ((e && e.message) ? e.message : String(e)));
-  }
-
   if (on.ambiguous) warnings.push('order_number: 存在多个候选值（需人工确认）');
   if (oq.ambiguous) warnings.push('order_quantity: 存在多个候选值（需人工确认）');
   if (!cn.found && cn.candidates.length === 0) warnings.push('customer_name: ' + (cn.reason || '无候选'));
@@ -420,7 +410,6 @@ export function extractOrderInfo(input) {
     order_number_joined: on.order_number_joined,
     production_number: pn.value,
     customer_name: cn.value,
-    base_texture: baseTexture,
     delivery_date: dd.value,
     order_quantity: oq.value,
     debug: {
