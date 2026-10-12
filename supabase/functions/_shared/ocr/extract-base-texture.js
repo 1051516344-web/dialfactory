@@ -137,14 +137,22 @@ function collectVerticalRightColumn(words, label, opts) {
     // 超长「标签」则被收紧（S01 误判场景下 ±40px，仍排除中心距 85/100px 的备注）。
     const yTol = Math.min(0.5 * label.height, 2.0 * h);
     const yNear = Math.abs((wTop + wBottom) / 2 - labelCenterY) <= yTol;
-    if (toRight && yNear && !isBoundaryLabelWord(w.word)) {
+    // S01-NEW 修复（方案C）：排除「纯字母+数字」编号（如 DR951）。
+    // 这类词块常比真值更靠近标签，会在下方列筛选中把真值挤出候选列。
+    const pureCode = /^[A-Z]{1,3}\d+$/i.test(normalize(w.word)) && (w.width || 0) <= 12;
+    if (toRight && yNear && !isBoundaryLabelWord(w.word) && !pureCode) {
       candidates.push(w);
     }
   }
   if (!candidates.length) return [];
 
-  const minX = Math.min(...candidates.map((w) => w.x));
-  const firstColumn = candidates.filter((w) => w.x <= minX + opts.lineTolRows * h);
+  // S01-NEW 修复（方案A）：必须在列筛选之前做语义优先——
+  // 否则最靠近标签的无关词块（编号/部件号）会先决定整列，把真值直接删掉。
+  const TEX_WORDS = ['雕刻', '油压', '无底纹', '底纹', '电镀', '喷砂', '太阳纹', '直线纹', '拉丝', '网印', '车圈', '唱片纹', '抛光'];
+  const texLike = candidates.filter((w) => TEX_WORDS.some((k) => String(w.word).includes(k)));
+  const pool = texLike.length ? texLike : candidates;
+  const minX = Math.min(...pool.map((w) => w.x));
+  const firstColumn = pool.filter((w) => w.x <= minX + opts.lineTolRows * h);
   firstColumn.sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y));
   return firstColumn;
 }
