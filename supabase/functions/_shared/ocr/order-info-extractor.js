@@ -62,6 +62,9 @@ function isOrderNumberLabel(t) {
 }
 // S01：客户单号值允许带连字符（样本值 INT-7087）——仅用于在已有候选里优先挑选，不排斥其他写法
 const ORDER_NO_VALUE_RE = /^[A-Za-z]{1,6}[-/]?\d{3,}$/;
+// S03 兜底专用（收紧版）：OCR 会把直径符号 ⌀ 读成小写 o/p（如 "o3260"），
+// 若沿用 [A-Za-z]，兜底会把尺寸误当单号返回；故兜底只认大写开头。
+const FALLBACK_PO_RE = /^[A-Z]{1,6}[-/]?\d{3,}$/;
 function isOrderQuantityLabel(t) {
   if (t.includes('订单数量')) return true;
   // S01：数量标签同样可能写成繁体「訂製数量 / 訂單数量 / 數量」
@@ -94,7 +97,8 @@ function isProductionLabel(t) {
 }
 
 /* ---------- 标签附近取值：右侧优先，下方兜底，中线对齐选最近 ---------- */
-function pickValue(words, label) {
+// S03：新增 opts（opt-in 参数）——仅当传入 fallbackShape 时才启用下面的形态兜底
+function pickValue(words, label, opts) {
   const fh = fontH(label);
   const vertical = isVerticalBox(label);
   const centerTol = vertical ? TOL.CENTER_TOL * label.height : 1.5 * fh;
@@ -126,6 +130,24 @@ function pickValue(words, label) {
     if (da !== db) return da - db;
     return a.x - b.x;
   });
+
+  // S03 兜底：右窗内无候选时（样本 S03 的值在标签右侧 153px，超出 6×fh=132），
+  // 把右向范围放宽到 2 倍，并只保留「单号形态」的词，再按中线距离取最近。
+  // opt-in：只有传了 fallbackShape 的字段才启用（当前仅客户单号），
+  // 保证共用 pickValue 的交期 / 数量两个字段行为完全不变。
+  if (!rightCands.length && opts && opts.fallbackShape) {
+    const wideMax = right + TOL.RIGHT_MAX * 2 * fh;
+    for (const w of words) {
+      if (w === label) continue;
+      if (w.x < right - TOL.EDGE * fh) continue;
+      if (w.x > wideMax) continue;
+      if (Math.abs(centerY(w) - lcy) > centerTol) continue;
+      if (!isValueLike(w)) continue;
+      if (!opts.fallbackShape.test(normalize(w.word))) continue;
+      rightCands.push(w);
+    }
+    rightCands.sort((a, b) => Math.abs(centerY(a) - lcy) - Math.abs(centerY(b) - lcy) || a.x - b.x);
+  }
 
   const belowCands = [];
   for (const w of words) {
@@ -178,7 +200,8 @@ export function extractOrderNumber(words) {
   if (!label) {
     return { value: '', found: false, source: 'label', reason: '未找到「订单号码/订单号/PO」标签', candidates: [], order_number_candidates: [], order_number_joined: '' };
   }
-  const { rightCands, belowCands, primary, sameLine } = pickValue(words, label);
+  // S03：仅此一处传入 fallbackShape（交期 L322 / 数量 L355 两处调用保持 pickValue(words, label) 不变）
+  const { rightCands, belowCands, primary, sameLine } = pickValue(words, label, { fallbackShape: FALLBACK_PO_RE });
   const candidates = rightCands.length ? rightCands : belowCands;
 
   const seen = new Set();
