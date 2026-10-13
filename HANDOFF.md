@@ -79,6 +79,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_route_signature ON process_route_templates
 NOTIFY pgrst, 'reload schema';
 ```
 
+**迁移 014**（新增 7 道采购/外发工序，P36–P42 —— **已执行** ✅）：
+
+文件：`supabase/migrations/014_add_outsourcing_processes.sql`
+
+内容：往 `processes` 表插入 7 条工序（制一 P36 采购粗胚 / P37 外发焊脚 / P38 外发车床 /
+P39 外发批面；制二 P40 电镀外发；制三 P41 印刷外发；制四 P42 点夜光外发），
+`type='辅助'`、`is_required=false`、`is_active=true`；逐行幂等（`WHERE NOT EXISTS (code)`）。
+
+验证：`SELECT count(*) FROM processes WHERE is_active = true;` → 应为 **42**（原 35 + 7）。
+
 ## 7. 如何在台式电脑继续
 
 1. **克隆仓库**：
