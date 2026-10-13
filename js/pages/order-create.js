@@ -339,7 +339,6 @@ const OrderCreatePage = (() => {
     formData.customer_order_no = r.customer_order_no || formData.customer_order_no || '';
     formData.order_qty = qty != null ? String(qty) : formData.order_qty || '';
     formData.due_date = due || formData.due_date || '';
-    formData.base_texture = r.base_texture || formData.base_texture || '';
     formData.order_no = r.order_no || formData.order_no || '';
 
     // 客户：customer_name（OCR 原文）与 customer_id（档案匹配）彻底解耦。

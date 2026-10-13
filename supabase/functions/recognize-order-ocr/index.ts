@@ -4,14 +4,14 @@
    用阿里云 OCR + 坐标定位 + 规则提取，替代 Vision 模型（qwen-vl）。
    接口契约与 localhost:3200 的 /api/extract 完全一致：
      POST multipart/form-data，字段名必须：file
-     返回 6 字段扁平 JSON：
+     返回 7 字段扁平 JSON：
        { "customer_name", "customer_order_no", "order_no",
-         "base_texture", "delivery_date", "order_quantity",
+         "delivery_date", "order_quantity",
          "customer_candidates", "order_number_candidates" }
    字段映射（契约一字不改，与本地 drawing-analyze-server.js 对齐）：
      order_number      → customer_order_no
      production_number → order_no
-     base_texture 取 raw 字符串
+   注：底纹 base_texture 已按业务决定停用（图纸上传后现场直接看图），响应不再返回该字段。
    识别不到 → 该字段为 ''（空串），绝不猜测、绝不返回假数据。
    OCR 调用失败（网络/解析/鉴权）→ HTTP 5xx + { error }。
    支持 OPTIONS 预检与 CORS 头（Access-Control-Allow-Origin: *）。
@@ -98,7 +98,6 @@ Deno.serve(async (req) => {
       customer_name: info.customer_name || '',
       customer_order_no: info.order_number_joined || info.order_number || '',
       order_no: info.production_number || '',
-      base_texture: (info.base_texture && info.base_texture.raw) || '',
       delivery_date: info.delivery_date || '',
       order_quantity: info.order_quantity || '',
       customer_candidates: (info.debug && info.debug.customer_candidates) || [],
