@@ -1,174 +1,207 @@
 /* ============================================================
-   DialFactory V1 · Production Dashboard (Phase 3-E)
-   Industrial cockpit — 4 sections: KPI → Orders Table → Process Load → Activity
-   Data via ProductionRecordsAPI.getProductionOverview()
+   DialFactory V1 · 首页 = 今日待办清单（巡检式使用）
+
+   数据来源（全部为现有 API，不依赖 production_records.status='生产中' 的旧口径）：
+     OrdersAPI.list({})                          → 在产 + 已暂停（默认已排除终态）
+     OrdersAPI.getNodeStats(ids)                  → 当前工序 / 距上次更新 / 进度
+     ProductionRecordsAPI.getRecentActivity(20)   → 最近生产动态
+     ProductionRecordsAPI.getTodayCompleted()     → 今日完成工序数
+   排序：updated_at 升序（与订单列表页一致 —— 两页顺序必须相同）
    ============================================================ */
 
 const DashboardPage = (() => {
+
+  const TODO_LIMIT = 8;   // 待巡检清单条数
+  const DUE_LIMIT  = 5;   // 交期临近条数
 
   async function render() {
     const container = document.getElementById('page-container');
     if (!container) return;
 
     container.innerHTML = `
-      <div class="page-header"><h1>生产明细</h1></div>
-      ${Skeleton.cards(5)}
+      <div class="page-header">
+        <h1>今日待办</h1>
+        <a href="#/orders/new" class="btn btn-primary">+ 新建订单</a>
+      </div>
+      ${Skeleton.cards(3)}
     `;
 
-    // Fetch overview + customer names in parallel
-    const [overviewResult, custResult] = await Promise.all([
-      ProductionRecordsAPI.getProductionOverview(),
-      CustomersAPI.list()
+    // 主数据：在产 + 已暂停（list({}) 默认已排除 completed / cancelled）
+    // 另外两个是各自独立的轻查询；不再使用 getProductionOverview 的 currentProduction 旧口径
+    const [ordersResult, recentResult, todayResult] = await Promise.all([
+      OrdersAPI.list({ pageSize: 100 }),
+      ProductionRecordsAPI.getRecentActivity(20),
+      ProductionRecordsAPI.getTodayCompleted()
     ]);
 
-    if (!overviewResult.ok) {
+    if (!ordersResult.ok) {
       container.innerHTML = `
-        <div class="page-header"><h1>生产明细</h1></div>
+        <div class="page-header"><h1>今日待办</h1></div>
         <div class="card" style="text-align:center;padding:var(--space-xl);">
           <p style="font-size:2rem;">⚠️</p>
           <p style="color:var(--color-danger);">加载失败</p>
-          <p style="font-size:var(--font-size-sm);color:var(--text-secondary);">${escapeHTML(String(overviewResult.error || ''))}</p>
+          <p style="font-size:var(--font-size-sm);color:var(--text-secondary);">${escapeHTML(String(ordersResult.error || ''))}</p>
           <button class="btn btn-primary" style="margin-top:var(--space-md);" onclick="DashboardPage.render()">重试</button>
         </div>
       `;
       return;
     }
 
-    // Build customer lookup map
-    const customerMap = {};
-    if (custResult.ok && custResult.data) {
-      custResult.data.forEach(c => { customerMap[c.id] = c.short_name || c.name; });
-    }
+    const orders = ordersResult.data || [];
+    const recentActivity = recentResult.ok ? (recentResult.data || []) : [];
+    const todayDone = (todayResult.ok && todayResult.count) || 0;
 
-    const d = overviewResult.data;
+    // 先排序截断，再只为「要显示的两份清单」取节点统计（≤ 13 单）
+    const todoTop = orders.slice().sort(sortByUpdatedAsc).slice(0, TODO_LIMIT);
+    const dueTop = pickDueSoon(orders);
+    const needIds = [...new Set([...todoTop, ...dueTop].map(o => o.id))];
+
+    let statsMap = {};
+    if (needIds.length > 0) {
+      const statsResult = await OrdersAPI.getNodeStats(needIds);
+      if (statsResult.ok) statsMap = statsResult.data;
+    }
+    const attachStats = (list) => list.map(o => ({ ...o, stats: statsMap[o.id] || defaultStats() }));
+
+    const summary = buildSummary(orders, todayDone);
+    const truncated = (ordersResult.count || 0) > orders.length;
 
     container.innerHTML = `
       <div class="page-header">
-        <h1>生产明细</h1>
+        <h1>今日待办</h1>
         <a href="#/orders/new" class="btn btn-primary">+ 新建订单</a>
       </div>
 
-      ${renderKPIOverview(d)}
-      ${renderCurrentOrders(d.currentProduction, customerMap)}
-      ${renderProcessDistribution(d.activeProcesses)}
-      ${renderRecentActivity(d.recentActivity)}
+      ${renderSummaryLine(summary, truncated)}
+      ${renderTodoList(attachStats(todoTop), orders.length)}
+      ${renderDueSoon(attachStats(dueTop))}
+      ${renderRecentActivity(recentActivity)}
     `;
   }
 
   // ==========================================================
-  // Section 1 — KPI Overview
+  // 汇总行（一行小字，取代原来的 4 张大 KPI 卡）
+  // 口径统一为「订单状态 + 交期 + production_records 已完成」，与列表页同源
   // ==========================================================
-  function renderKPIOverview(d) {
+  function renderSummaryLine(s, truncated) {
+    const tail = truncated ? ' · <span style="color:var(--color-danger);">仅统计前 100 单</span>' : '';
     return `
-      <div class="kpi-grid">
-        <div class="kpi-card">
-          <div class="kpi-label">生产中订单</div>
-          <div class="kpi-value" style="color:#2563EB;">${d.totalRunningOrders}</div>
-          <div class="kpi-subtitle">当前运行中</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">已完成订单</div>
-          <div class="kpi-value" style="color:#16A34A;">${d.todayCompleted}</div>
-          <div class="kpi-subtitle">今日完成</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">待处理订单</div>
-          <div class="kpi-value" style="color:#EA580C;">${d.pendingOrders}</div>
-          <div class="kpi-subtitle">等待录入工序</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">当前生产工序数</div>
-          <div class="kpi-value" style="color:#0F172A;">${d.todayActiveProcesses}</div>
-          <div class="kpi-subtitle">活跃工序类型</div>
-        </div>
+      <div class="order-list-count">
+        在产 <strong>${s.active}</strong> ·
+        已暂停 <strong>${s.paused}</strong> ·
+        逾期 <strong style="${s.overdue > 0 ? 'color:var(--color-danger);' : ''}">${s.overdue}</strong> ·
+        今日完成工序 <strong>${s.todayDone}</strong>${tail}
       </div>
     `;
   }
 
-  // ==========================================================
-  // Section 2 — Current Production Orders Table
-  // ==========================================================
-  function renderCurrentOrders(orders, customerMap) {
-    if (!orders || orders.length === 0) {
-      return `
-        <div class="section-title">当前生产状态</div>
-        ${EmptyState.render({ icon: '📋', title: '无生产中的订单', desc: '当前没有正在生产的订单。' })}
-      `;
+  function buildSummary(orders, todayDone) {
+    let active = 0, paused = 0, overdue = 0;
+    for (const o of orders) {
+      if (o.status === 'in_production') active++;
+      else if (o.status === 'paused') paused++;
+      const d = dueDiffDays(o.due_date);
+      if (d != null && d < 0) overdue++;
     }
+    return { active, paused, overdue, todayDone };
+  }
 
-    const rows = orders.map(o => {
-      const specText = [o.base_texture, o.plate_color, o.specs?.base_plate_color].filter(Boolean).join('+') || '—';
-      const custName = customerMap[o.customer_id] || '—';
-      return `
-        <tr class="prod-table-row" onclick="Router.navigate('/orders/${o.order_id}')">
-          <td class="prod-table-cell prod-table-order-no">#${escapeHTML(o.order_no)}</td>
-          <td class="prod-table-cell prod-table-customer">${escapeHTML(custName)}</td>
-          <td class="prod-table-cell prod-table-product">${escapeHTML(specText)}</td>
-          <td class="prod-table-cell prod-table-process">${escapeHTML(o.process_name)}</td>
-          <td class="prod-table-cell prod-table-status">${StatusBadge.render(o.status)}</td>
-        </tr>
-      `;
-    }).join('');
-
-    return `
-      <div class="section-title section-collapse" onclick="DashboardPage.toggleSection('current-orders')">
-        <span>当前生产状态 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(${orders.length})</span></span>
-        <span class="collapse-arrow collapse-arrow-open" id="arrow-current-orders">▼</span>
+  // ==========================================================
+  // 1 · 待巡检清单（updated_at 升序的前 N 单）
+  // ==========================================================
+  function renderTodoList(list, totalCount) {
+    const header = `
+      <div class="section-title">
+        <span>待巡检清单 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(前 ${list.length} / 共 ${totalCount} 单)</span></span>
+        <a href="#/orders" style="font-size:var(--font-size-sm);color:var(--color-primary);text-decoration:none;">查看全部 →</a>
       </div>
-      <div class="card collapse-body" style="padding:0;overflow:hidden;" id="body-current-orders">
-        <table class="prod-table">
-          <thead>
-            <tr>
-              <th class="prod-table-th">订单号</th>
-              <th class="prod-table-th">客户</th>
-              <th class="prod-table-th">产品</th>
-              <th class="prod-table-th">当前工序</th>
-              <th class="prod-table-th">状态</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+    `;
+    if (list.length === 0) {
+      return header + EmptyState.render({ icon: '✅', title: '没有需要巡检的订单', desc: '当前没有在产或已暂停的订单。' });
+    }
+    return header + `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div class="todo-list">${list.map(renderTodoRow).join('')}</div>
       </div>
     `;
   }
 
   // ==========================================================
-  // Section 3 — Process Load Distribution
+  // 2 · 交期临近（已超期 或 3 天内到期，按交期升序）
   // ==========================================================
-  function renderProcessDistribution(dist) {
-    const entries = Object.entries(dist || {});
-    if (entries.length === 0) {
-      return `
-        <div class="section-title">工序负载分布</div>
-        ${EmptyState.render({ icon: '📊', title: '无活跃工序', desc: '当前没有正在进行的生产工序。' })}
-      `;
-    }
-
-    entries.sort((a, b) => b[1] - a[1]);
-    const maxCount = Math.max(...entries.map(([, c]) => c), 1);
-
-    const bars = entries.map(([name, count]) => {
-      const barPct = Math.round((count / maxCount) * 100);
-      return `
-        <div class="process-dist-row" onclick="Router.navigate('/orders?process=${encodeURIComponent(name)}')" style="cursor:pointer;">
-          <span class="process-dist-name">${escapeHTML(name)}</span>
-          <div class="process-dist-bar-track">
-            <div class="process-dist-bar-fill" style="width:${barPct}%;"></div>
-          </div>
-          <span class="process-dist-count">${count}</span>
-        </div>
-      `;
-    }).join('');
-
-    return `
-      <div class="section-title section-collapse" onclick="DashboardPage.toggleSection('process-dist')">
-        <span>工序负载分布 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(${entries.length})</span></span>
-        <span class="collapse-arrow collapse-arrow-open" id="arrow-process-dist">▼</span>
-      </div>
-      <div class="card collapse-body" id="body-process-dist">
-        <div class="process-dist-list">${bars}</div>
+  function renderDueSoon(list) {
+    const header = `
+      <div class="section-title">
+        <span>交期临近 <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">(已超期 / 3 天内)</span></span>
       </div>
     `;
+    if (list.length === 0) {
+      return header + EmptyState.render({ icon: '📅', title: '近 3 天无到期订单', desc: '没有需要催交期的在产订单。' });
+    }
+    return header + `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div class="todo-list">${list.map(renderTodoRow).join('')}</div>
+      </div>
+    `;
+  }
+
+  /** 一行式待办条目：订单号 · 客户简称 · 当前工序(部门) · 距上次更新 · 交期剩余 */
+  function renderTodoRow(o) {
+    const s = o.stats || {};
+    const cur = s.currentNode;
+    const proc = cur ? `${cur.dept_name || ''}${cur.process_name || ''}` : '—';
+    const pausedBadge = o.status === 'paused'
+      ? '<span class="badge badge-sm" style="background:var(--bg-paused);color:#92400E;margin-left:var(--space-xs);">⏸ 已暂停</span>'
+      : '';
+    const d = dueDiffDays(o.due_date);
+    const dueCls = d == null ? '' : (d < 0 ? ' due-over' : (d <= 3 ? ' due-soon' : ''));
+    return `
+      <div class="todo-row" onclick="Router.navigate('/orders/${o.id}')">
+        <span class="todo-order-no">#${escapeHTML(o.order_no)}</span>
+        <span class="todo-customer">${escapeHTML(o.customer?.short_name || o.customer?.name || '—')}</span>
+        <span class="todo-process">${escapeHTML(proc)}${pausedBadge}</span>
+        <span class="todo-updated">${escapeHTML(updatedAgo(o.updated_at))}</span>
+        <span class="todo-due${dueCls}">${d == null ? '—' : escapeHTML(Format.dueDays(o.due_date))}</span>
+      </div>
+    `;
+  }
+
+  // ==========================================================
+  // 小工具
+  // ==========================================================
+  /** 交期距今天数：<0 已超期、0 今天到期、>0 还剩 N 天（与 Format.dueDays 同口径） */
+  function dueDiffDays(dateStr) {
+    if (!dateStr) return null;
+    return Math.ceil((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24));
+  }
+
+  /** 交期临近集合：已超期或 3 天内到期，按交期升序取前 N */
+  function pickDueSoon(orders) {
+    return orders
+      .filter(o => { const d = dueDiffDays(o.due_date); return d != null && d <= 3; })
+      .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
+      .slice(0, DUE_LIMIT);
+  }
+
+  /** 距上次更新：小时级（巡检式使用，整天粒度太粗） */
+  function updatedAgo(isoStr) {
+    if (!isoStr) return '—';
+    const ms = Date.now() - new Date(isoStr).getTime();
+    if (ms < 0) return '刚刚更新';
+    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+    if (days >= 1) return `${days} 天未更新`;
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    return hours >= 1 ? `${hours} 小时未更新` : '刚刚更新';
+  }
+
+  /** 排序：与订单列表页一致（updated_at 升序 = 最久未更新在前） */
+  function sortByUpdatedAsc(a, b) {
+    return new Date(a.updated_at || 0) - new Date(b.updated_at || 0);
+  }
+
+  /** stats 缺省值（与 order-list.js 的 defaultStats 保持一致） */
+  function defaultStats() {
+    return { total: 0, done: 0, active: 0, paused: 0, waiting: 0, currentNode: null, isStalled: false, stalledDays: 0, hasNodes: false, progressPercent: 0 };
   }
 
   // ==========================================================

@@ -128,6 +128,26 @@
   color: #92400E;
 }
 
+/* 首页「今日待办」：待巡检清单 / 交期临近的紧凑行 */
+.todo-list { display: flex; flex-direction: column; }
+
+.todo-row {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--bg-muted);
+  cursor: pointer; font-size: var(--font-size-sm);
+}
+.todo-row:last-child { border-bottom: none; }
+.todo-row:hover { background: var(--bg-muted); }
+
+.todo-order-no { font-weight: 600; color: var(--color-primary); min-width: 110px; }
+.todo-customer { color: var(--text-secondary); min-width: 68px; }
+.todo-process  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-updated  { color: var(--text-secondary); min-width: 108px; text-align: right; }
+.todo-due      { min-width: 84px; text-align: right; }
+.todo-due.due-soon { color: #92400E; font-weight: 600; }
+.todo-due.due-over { color: var(--color-danger); font-weight: 600; }
+
 /* Route Confirm Step */
 .route-step-row {
   display: flex;
@@ -610,6 +630,18 @@
   }
   .process-dist-name {
     min-width: 48px;
+  }
+  /* 首页待办行：窄屏换行，工序名独占一行 */
+  .todo-row {
+    flex-wrap: wrap;
+    gap: var(--space-xs) var(--space-sm);
+  }
+  .todo-process {
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .todo-updated {
+    min-width: 0;
   }
 }
 
