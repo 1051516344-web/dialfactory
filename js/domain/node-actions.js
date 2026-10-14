@@ -14,10 +14,9 @@ const NodeActions = (() => {
     const v = NodeState.validate(node.status, 'done');
     if (!v.valid) return { ok: false, error: v.error, phase: 'primary' };
 
-    // Check qty_out for 检验
-    const processType = node.process_type || node.process?.type;
-    if (processType === '检验') {
-      const qv = Validation.validateQtyOut(processType, options.qtyOut);
+    // Check qty_out：仅总QC（P35）需要填产出
+    if (Validation.requiresQtyOut(node)) {
+      const qv = Validation.validateQtyOut(node, options.qtyOut);
       if (!qv.valid) return { ok: false, error: qv.error, phase: 'primary' };
     }
 

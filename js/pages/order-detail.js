@@ -189,7 +189,7 @@ const OrderDetailPage = (() => {
     let actionsHtml = '';
     // Hide node "完成" when production record is active — avoid duplicate completion buttons
     if (actions.includes('advance') && !prodIsActive) {
-      const label = (node.process_type === '检验' || node.process?.type === '检验') ? '完成(需填产出)' : '完成';
+      const label = Validation.requiresQtyOut(node) ? '完成(需填产出)' : '完成';
       actionsHtml += `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onAdvance('${node.id}')">${label}</button>`;
     }
     if (actions.includes('pause')) {
@@ -287,9 +287,8 @@ const OrderDetailPage = (() => {
     const node = getNode(nodeId);
     if (!node) return;
 
-    // Check if 检验 type
-    const processType = node.process_type || node.process?.type;
-    if (processType === '检验') {
+    // Check 是否需填产出（仅总QC P35）
+    if (Validation.requiresQtyOut(node)) {
       ConfirmDialog.show({
         title: '填写产出数量',
         content: `
@@ -819,9 +818,8 @@ const OrderDetailPage = (() => {
         // 2. Refresh production timeline to show updated duration
         await refreshProductionRecords();
 
-        // 3. Advance the node to move the flow forward (B12: 检验 needs qty_out)
-        const processType = node.process_type || node.process?.type;
-        const advanceOpts = (processType === '检验') ? { qtyOut: goodQty } : {};
+        // 3. Advance the node to move the flow forward (B12: 仅总QC P35 需要 qty_out)
+        const advanceOpts = Validation.requiresQtyOut(node) ? { qtyOut: goodQty } : {};
         const advanceResult = await NodeActions.advance(currentOrder, node, advanceOpts);
         handleActionResult(advanceResult);
 
