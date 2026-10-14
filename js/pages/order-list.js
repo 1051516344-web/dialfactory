@@ -115,12 +115,9 @@ const OrderListPage = (() => {
     return { total: 0, done: 0, active: 0, paused: 0, waiting: 0, currentNode: null, isStalled: false, stalledDays: 0, hasNodes: false, progressPercent: 0 };
   }
 
-  /** Stalled first, then due_date ascending. */
+  /** 按 updated_at 升序：最久未更新在前（卡滞高亮仅作视觉标记，不参与排序） */
   function sortOrders(a, b) {
-    const sa = a.stats || {}, sb = b.stats || {};
-    if (sa.isStalled && !sb.isStalled) return -1;
-    if (!sa.isStalled && sb.isStalled) return 1;
-    return new Date(a.due_date) - new Date(b.due_date);
+    return new Date(a.updated_at || 0) - new Date(b.updated_at || 0);
   }
 
   function renderFilterBar() {
@@ -130,7 +127,7 @@ const OrderListPage = (() => {
                value="${escapeHTML(currentFilters.search)}"
                oninput="OrderListPage.onSearch(this.value)">
         <select class="form-select" id="filter-status" onchange="OrderListPage.onFilter('status', this.value)">
-          <option value="">全部状态</option>
+          <option value="">在产订单（默认）</option>
           <option value="in_production" ${currentFilters.status==='in_production'?'selected':''}>生产中</option>
           <option value="paused" ${currentFilters.status==='paused'?'selected':''}>已暂停</option>
           <option value="completed" ${currentFilters.status==='completed'?'selected':''}>已完成</option>

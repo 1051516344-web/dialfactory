@@ -31,12 +31,20 @@ const OrdersAPI = (() => {
     let query = db.from('orders')
       .select(`${ORDER_LIST_COLS}, customer:customers(name, short_name)`, { count: 'exact' });
 
-    if (status)   query = query.eq('status', status);
+    if (status) {
+      query = query.eq('status', status);
+    } else {
+      // 方案 A：默认视图只显示在产订单（in_production / paused），排除终态 completed / cancelled。
+      // 手动筛选状态时走上分支，故「已完成 / 已取消」仍可正常查看。
+      // 用 .in() 而非 .not()/.or()：本项目已验证 .in() 可用，规避嵌套过滤语法风险。
+      query = query.in('status', ['in_production', 'paused']);
+    }
     if (customerId) query = query.eq('customer_id', customerId);
     if (search)   query = query.ilike('order_no', `%${search}%`);
     if (deptOrderIds) query = query.in('id', deptOrderIds);
 
-    query = query.order('created_at', { ascending: false })
+    // 最久未更新优先分页（与前端 sortOrders 的 updated_at 升序一致）
+    query = query.order('updated_at', { ascending: true })
       .range(page * pageSize, (page + 1) * pageSize - 1);
 
     return DB.call(query);
