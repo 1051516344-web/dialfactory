@@ -31,7 +31,11 @@ const NodeActions = (() => {
     // Auto-activate next waiting node (with empty dept skip — Issue I-1)
     let activatedNode = null;
     let warning = null;
-    const sorted = [...(order.nodes || [])].sort((a, b) => a.seq - b.seq);
+    // FIX(R46499): 先把「本次已完成的节点」合并进数组，再做激活判定。
+    // 原实现用 order.nodes 的旧快照，当前节点在内存里仍是 active，
+    // 导致跨部门时 allDeptDone 恒为 false，下一部门首节点永远不会被激活。
+    const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? updatedNode : n);
+    const sorted = [...updatedNodes].sort((a, b) => a.seq - b.seq);
     const nextBySeq = sorted.find(n => n.seq > node.seq);
 
     if (nextBySeq) {
@@ -53,13 +57,11 @@ const NodeActions = (() => {
       }
     }
 
-    // Derive and update order status
-    const updatedNodes = (order.nodes || []).map(n => {
-      if (n.id === node.id) return updatedNode;
-      if (activatedNode && n.id === activatedNode.id) return activatedNode;
-      return n;
-    });
-    const newStatus = OrderState.derive(updatedNodes);
+    // Derive and update order status（把新激活的节点也并入）
+    const nodesForStatus = activatedNode
+      ? updatedNodes.map(n => n.id === activatedNode.id ? activatedNode : n)
+      : updatedNodes;
+    const newStatus = OrderState.derive(nodesForStatus);
     const r3 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r3.ok && !warning) warning = 'status_update_delayed';
 
