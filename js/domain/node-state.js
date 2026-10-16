@@ -41,8 +41,11 @@ const NodeState = (() => {
       actions.push('resume', 'append', 'record_exception');
     } else if (s === 'done') {
       actions.push('rework', 'append', 'record_exception');
+    } else if (s === 'waiting') {
+      // FIX(R46499): 手动激活。跨部门未自动激活 / 数据异常时，
+      // waiting 节点原先没有任何可用操作，会彻底卡死。
+      actions.push('activate');
     }
-    // waiting: no actions
 
     return actions;
   }

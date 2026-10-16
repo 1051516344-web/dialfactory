@@ -116,6 +116,33 @@ const NodeActions = (() => {
   }
 
   // ==========================================================
+  // M3b · activate — waiting → active（手动激活，FIX R46499）
+  // 用于跨部门未自动激活 / 数据异常导致 waiting 节点无操作可用的场景
+  // ==========================================================
+  async function activate(order, node) {
+    const v = NodeState.validate(node.status, 'active');
+    if (!v.valid) return { ok: false, error: v.error, phase: 'primary' };
+
+    // 顺序模型守卫：本单已有别的进行中节点时不允许再激活，避免出现两个 active
+    const running = (order.nodes || []).find(n => n.id !== node.id && n.status === 'active');
+    if (running) {
+      const label = running.process_code || running.process_name || '—';
+      return { ok: false, error: '已有进行中的工序（' + label + '），请先完成或暂停它', phase: 'forbidden' };
+    }
+
+    const r1 = await OrdersAPI.updateNode(node.id, { status: 'active' });
+    if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
+
+    const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
+    const newStatus = OrderState.derive(updatedNodes);
+    let warning = null;
+    const r2 = await OrdersAPI.updateStatus(order.id, newStatus);
+    if (!r2.ok) warning = 'status_update_delayed';
+
+    return { ok: true, updatedNode: r1.data, newOrderStatus: newStatus, warning };
+  }
+
+  // ==========================================================
   // M4 · rework — creates new active node (rework_pass+1)
   // ==========================================================
   async function rework(order, parentNode) {
@@ -383,5 +410,5 @@ const NodeActions = (() => {
     return { ok: true, newSeq, needsBump, newOrderStatus: newStatus, warning };
   }
 
-  return { advance, pause, resume, rework, append, recordException, undo, reworkSegment };
+  return { advance, pause, resume, activate, rework, append, recordException, undo, reworkSegment };
 })();

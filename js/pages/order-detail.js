@@ -198,6 +198,9 @@ const OrderDetailPage = (() => {
     if (actions.includes('resume')) {
       actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onResume('${node.id}')">恢复</button>`;
     }
+    if (actions.includes('activate')) {
+      actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onActivate('${node.id}')">激活</button>`;
+    }
     if (actions.includes('rework')) {
       actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onRework('${node.id}')">返工</button>`;
     }
@@ -338,6 +341,14 @@ const OrderDetailPage = (() => {
     const node = getNode(nodeId);
     if (!node) return;
     const result = await NodeActions.resume(currentOrder, node);
+    handleActionResult(result);
+  }
+
+  /** FIX(R46499): 手动激活 waiting 节点（跨部门未自动激活 / 数据异常时的兜底入口） */
+  async function onActivate(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const result = await NodeActions.activate(currentOrder, node);
     handleActionResult(result);
   }
 
