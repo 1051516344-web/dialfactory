@@ -236,6 +236,20 @@ const OrdersAPI = (() => {
   }
 
   /**
+   * Delete a single node — 用于移除误加且尚未开始的工序。
+   * production_records.node_id 为 ON DELETE SET NULL（迁移 011），历史记录会保留；
+   * order_nodes.seq 为 GAP_STEP=10 的间隙制，删除后留空号无需重排。
+   */
+  async function deleteNode(nodeId) {
+    return DB.call(
+      DB.get().from('order_nodes')
+        .delete()
+        .eq('id', nodeId)
+        .select('id')
+    );
+  }
+
+  /**
    * Create order with nodes. Compensatory rollback on failure.
    * REVISION 1: Single-transaction semantics.
    */
@@ -327,5 +341,5 @@ const OrdersAPI = (() => {
     return { ok: true };
   }
 
-  return { list, getById, getByOrderNo, getNodeStats, updateStatus, updateNode, insertNode, bumpSeq, createOrder, deleteOrder };
+  return { list, getById, getByOrderNo, getNodeStats, updateStatus, updateNode, insertNode, deleteNode, bumpSeq, createOrder, deleteOrder };
 })();

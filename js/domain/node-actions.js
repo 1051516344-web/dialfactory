@@ -157,6 +157,11 @@ const NodeActions = (() => {
     const nodes = order.nodes || [];
     const { seq: newSeq, needsBump, bumpFrom } = SeqCalc.gapInsertion(nodes, parentNode.seq);
 
+    // FIX(R46500): 同 append —— 返工时若本单已有进行中节点，新节点插入为 waiting，
+    // 避免出现两个 active（当前节点完成后再激活返工节点）。
+    const hasOtherActive = nodes.some(n => n.status === 'active');
+    const initialStatus = hasOtherActive ? 'waiting' : 'active';
+
     // Insert
     const r1 = await OrdersAPI.insertNode({
       order_id:     order.id,
@@ -167,7 +172,7 @@ const NodeActions = (() => {
       dept_name:    parentNode.dept_name,
       seq:          newSeq,
       rework_pass:  (parentNode.rework_pass || 0) + 1,
-      status:       'active',
+      status:       initialStatus,
       note:         null
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
@@ -219,6 +224,11 @@ const NodeActions = (() => {
     const nodes = order.nodes || [];
     const { seq: newSeq, needsBump, bumpFrom } = SeqCalc.gapInsertion(nodes, parentNode.seq);
 
+    // FIX(R46500): 不允许同时出现两个 active。若本单已有进行中的节点，
+    // 新节点插入为 waiting —— 当前节点完成后会被 advance 自动激活，语义仍是“下一步”。
+    const hasOtherActive = nodes.some(n => n.status === 'active');
+    const initialStatus = hasOtherActive ? 'waiting' : 'active';
+
     // Insert
     const r1 = await OrdersAPI.insertNode({
       order_id:     order.id,
@@ -229,7 +239,7 @@ const NodeActions = (() => {
       dept_name:    deptName,
       seq:          newSeq,
       rework_pass:  0,
-      status:       'active',
+      status:       initialStatus,
       note:         reason || null
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
@@ -410,5 +420,33 @@ const NodeActions = (() => {
     return { ok: true, newSeq, needsBump, newOrderStatus: newStatus, warning };
   }
 
-  return { advance, pause, resume, activate, rework, append, recordException, undo, reworkSegment };
+  // ==========================================================
+  // M8 · removeNode — 删除未开始的节点（清理误加的工序）
+  // 不做 seq 重排（GAP_STEP=10 间隙制，留空号合法）；
+  // production_records.node_id 为 ON DELETE SET NULL，历史记录保留。
+  // ==========================================================
+  async function removeNode(order, node) {
+    // 守卫1：只能移除尚未开始的工序，防止误删在产或已完工的记录
+    if (node.status !== 'waiting') {
+      return { ok: false, error: '只能移除未开始的工序', phase: 'forbidden' };
+    }
+    // 守卫2：返工节点不可单独移除（与 undo 的 F5 一致）
+    if (node.rework_pass > 0) {
+      return { ok: false, error: '返工节点不可单独移除', phase: 'forbidden' };
+    }
+
+    const r1 = await OrdersAPI.deleteNode(node.id);
+    if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
+
+    // 删除后用「去掉该节点」的数组重新推导订单状态
+    const remaining = (order.nodes || []).filter(n => n.id !== node.id);
+    const newStatus = OrderState.derive(remaining);
+    let warning = null;
+    const r2 = await OrdersAPI.updateStatus(order.id, newStatus);
+    if (!r2.ok) warning = 'status_update_delayed';
+
+    return { ok: true, removedNodeId: node.id, newOrderStatus: newStatus, warning };
+  }
+
+  return { advance, pause, resume, activate, removeNode, rework, append, recordException, undo, reworkSegment };
 })();

@@ -201,6 +201,9 @@ const OrderDetailPage = (() => {
     if (actions.includes('activate')) {
       actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onActivate('${node.id}')">激活</button>`;
     }
+    if (actions.includes('remove')) {
+      actionsHtml += `<button class="btn btn-danger btn-sm" onclick="OrderDetailPage.onRemove('${node.id}')">移除</button>`;
+    }
     if (actions.includes('rework')) {
       actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onRework('${node.id}')">返工</button>`;
     }
@@ -350,6 +353,26 @@ const OrderDetailPage = (() => {
     if (!node) return;
     const result = await NodeActions.activate(currentOrder, node);
     handleActionResult(result);
+  }
+
+  /** FIX(R46500): 移除误加的 waiting 节点（仅未开始的工序可移除，不可恢复） */
+  function onRemove(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    ConfirmDialog.show({
+      title: '确认移除工序',
+      content: `
+        <p>确认移除工序 <strong>${escapeHTML(node.process_name || '—')}</strong>？</p>
+        <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">仅可移除未开始的工序，移除后不可恢复。</p>
+        ${node.note ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">备注：${escapeHTML(node.note)}</p>` : ''}
+      `,
+      confirmLabel: '确认移除',
+      dangerous: true,
+      onConfirm: async () => {
+        const result = await NodeActions.removeNode(currentOrder, node);
+        handleActionResult(result);
+      }
+    });
   }
 
   async function onRework(nodeId) {
@@ -1069,5 +1092,5 @@ const OrderDetailPage = (() => {
     });
   }
 
-  return { render, onAdvance, onPause, onResume, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog, onSaveAsTemplate };
+  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog, onSaveAsTemplate };
 })();
