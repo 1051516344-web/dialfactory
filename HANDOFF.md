@@ -99,3 +99,26 @@ P39 外发批面；制二 P40 电镀外发；制三 P41 印刷外发；制四 P4
 3. **执行未跑的迁移** — 见上一步
 4. **本地预览** — 用任意静态服务器（如 VS Code Live Server）打开，或直接访问线上网址
 5. 改完代码 `git commit` + `git push`，GitHub Actions 自动部署到 Pages
+
+## 8. 开发规范（踩坑记录）
+
+### 8.1 改「结构相似」的领域函数后，必须跑行为测试
+
+**背景（2026-10-26，订单 R46500 排查）**：`js/domain/node-actions.js` 中 `rework()` 与 `append()` 的
+`Gap-based seq → insertNode({...})` 这一段**文本几乎完全相同**（唯一差别是 `process_id`
+分别取 `parentNode.process_id` / `proc.id`）。用文本锚点做替换时，第一个匹配总是命中 `rework()`，
+结果 `const initialStatus = ...` 落在了 `rework()` 里，而使用处 `status: initialStatus` 落在了
+`append()` 里 —— **`node --check` 完全看不出问题**（语法合法），直到运行 `append()` 才抛
+`ReferenceError: initialStatus is not defined`。
+
+**规范（改领域层 / 批量替换时必须遵守）**：
+
+1. **锚点唯一性**：替换前先统计每个 old 片段在文件中的出现次数，**必须恰好 1 次**（0 次或 >1 次直接报错停止）；
+   锚点要包含能区分兄弟函数的行（如 `process_id:   proc.id` vs `parentNode.process_id`）。
+2. **行为验证**：改完用 mock 依赖跑一遍真实函数（mock `OrdersAPI` / `ProcessesAPI`）。
+   注意 mock 必须**返回新对象、不修改入参内存**，否则复现不出真实 bug。
+   断言改动**落在正确的函数分支**里 —— 只有这样才发现"语法没错、但改错了函数"。
+3. **导出闭环检查**：页面的 `onclick="XxxPage.onFoo(...)"` 与 IIFE 末尾 `return { ... }` 必须对照检查。
+   曾漏掉 `onActivate` 导出，导致按钮点击直接 `TypeError`（表现为"按钮点不动"、无任何提示）。
+   检查方法：正则收集 `XxxPage\.(\w+)\(` 的全部引用，与最后一个 `return {...};` 的键比对，**差集必须为空**。
+
