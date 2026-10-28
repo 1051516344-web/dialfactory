@@ -13,9 +13,30 @@
    注意：阿里云 SDK（openapi-core）使用 ACS3-HMAC-SHA256，而非
    RPC V1 的 HMAC-SHA1。此前按 V1 签名导致公网 546 超时失败，
    已改为 ACS3 并在本地验证（HTTP 200，OCR 数据完整）。
+
+   中转（可选）：东京节点直连杭州常超时，可经 Cloudflare Worker 转发。
+   配置后**签名完全不变**（仍按阿里云 host 计算），只把 fetch 的目标 URL
+   换成 Worker 地址；到达阿里云时 Host 由 Worker 侧按目标 URL 自动设置，
+   因此签名校验仍然通过。
+   环境变量：OCR_PROXY_URL（如 https://xxx.workers.dev/ocr）、OCR_PROXY_KEY。
    ============================================================ */
 
 const OCR_ENDPOINT = 'https://ocr-api.cn-hangzhou.aliyuncs.com/';
+
+/** 中转 Worker 地址（env: OCR_PROXY_URL）。空字符串 = 直连阿里云。 */
+const OCR_PROXY_URL = readEnv('OCR_PROXY_URL');
+/** 中转鉴权密钥（env: OCR_PROXY_KEY），由 Worker 侧校验。 */
+const OCR_PROXY_KEY = readEnv('OCR_PROXY_KEY');
+
+/** 读 Deno 环境变量；非 Deno 运行时（本地测试）返回空字符串。 */
+function readEnv(name: string): string {
+  try {
+    if (typeof Deno !== 'undefined' && Deno.env?.get) return (Deno.env.get(name) ?? '').trim();
+  } catch {
+    /* 忽略：无权限或非 Deno 环境 */
+  }
+  return '';
+}
 
 /** Uint8Array → 小写 hex */
 function hex(bytes: Uint8Array): string {
@@ -55,6 +76,10 @@ function utcTimestamp(): string {
 export interface RecognizeOptions {
   accessKeyId: string;
   accessKeySecret: string;
+  /** 可选：覆盖 OCR_PROXY_URL（传空字符串表示强制直连） */
+  proxyUrl?: string;
+  /** 可选：覆盖 OCR_PROXY_KEY */
+  proxyKey?: string;
 }
 
 /**
@@ -64,8 +89,9 @@ export interface RecognizeOptions {
  */
 export async function recognizeGeneral(
   imageBytes: Uint8Array,
-  { accessKeyId, accessKeySecret }: RecognizeOptions,
+  opts: RecognizeOptions,
 ): Promise<{ Data: Record<string, unknown> }> {
+  const { accessKeyId, accessKeySecret } = opts;
   if (!accessKeyId || !accessKeySecret) {
     throw new Error('缺少 ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET');
   }
@@ -100,31 +126,51 @@ export async function recognizeGeneral(
   const authorization =
     `ACS3-HMAC-SHA256 Credential=${accessKeyId},SignedHeaders=${signedHeadersStr},Signature=${signature}`;
 
-  // 显式超时：阿里云端点不可达时，fetch 会一直挂起直到 worker 被 150s 墙钟杀掉。
+  // ---- 目标地址：配置了中转就走 Worker，否则直连阿里云 ----
+  const proxyUrl = (opts.proxyUrl ?? OCR_PROXY_URL).trim();
+  const proxyKey = (opts.proxyKey ?? OCR_PROXY_KEY).trim();
+  const usingProxy = proxyUrl.length > 0;
+  const targetUrl = usingProxy ? proxyUrl : OCR_ENDPOINT;
+  if (usingProxy && !proxyKey) {
+    throw new Error('已配置 OCR_PROXY_URL 但缺少 OCR_PROXY_KEY（Supabase → Edge Functions → Secrets）');
+  }
+
+  const requestHeaders: Record<string, string> = {
+    'x-acs-action': action,
+    'x-acs-version': version,
+    'x-acs-date': date,
+    'x-acs-signature-nonce': nonce,
+    'x-acs-content-sha256': payloadHash,
+    'content-type': 'application/octet-stream',
+    'accept': 'application/json',
+    'authorization': authorization,
+  };
+  if (usingProxy) {
+    // 关键：不发送 host 头。签名里的 host 仍是阿里云域名，
+    // 由 Worker 转发时 fetch(阿里云URL) 自动生成正确的 Host。
+    requestHeaders['x-proxy-key'] = proxyKey;
+  } else {
+    requestHeaders['host'] = host;
+  }
+
+  // 显式超时：目标不可达时 fetch 会挂到 worker 被墙钟杀掉。
   // 加 AbortController 让它在 25s 内抛 AbortError，返回可读错误而非 546。
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   let response: Response;
   try {
-    response = await fetch(OCR_ENDPOINT, {
+    response = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'host': host,
-        'x-acs-action': action,
-        'x-acs-version': version,
-        'x-acs-date': date,
-        'x-acs-signature-nonce': nonce,
-        'x-acs-content-sha256': payloadHash,
-        'content-type': 'application/octet-stream',
-        'accept': 'application/json',
-        'authorization': authorization,
-      },
+      headers: requestHeaders,
       body: imageBytes,
       signal: controller.signal,
     });
   } catch (e) {
     if ((e as Error)?.name === 'AbortError') {
-      throw new Error('OCR 请求超时（25s）：Edge Function 无法在 25s 内连通阿里云端点 ocr-api.cn-hangzhou.aliyuncs.com，疑似东京节点到该中国区端点的网络出站被阻断/黑洞');
+      const where = usingProxy
+        ? `中转 Worker（${targetUrl}）`
+        : `阿里云端点（${host}）`;
+      throw new Error(`OCR 请求超时（25s）：Edge Function 无法在 25s 内连通${where}，疑似网络出站被阻断/黑洞`);
     }
     throw e;
   } finally {
