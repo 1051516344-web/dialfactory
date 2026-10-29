@@ -48,5 +48,33 @@ const CustomersAPI = (() => {
     ) || null;
   }
 
-  return { list, search, displayName, match };
+  /**
+   * Create a customer from a raw name (e.g. OCR text with no archive entry).
+   * Dedupes by exact name / short_name / code (case-insensitive) before inserting;
+   * returns the existing record with `deduped: true` when a match is found.
+   */
+  async function create({ name, short_name = null, code = null }) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return { ok: false, error: `客户名称不能为空` };
+
+    // 去重：与现有档案按 name / short_name / code 精确比对（大小写不敏感）
+    const existing = await list();
+    if (existing.ok && Array.isArray(existing.data)) {
+      const lower = (v) => String(v || '').trim().toLowerCase();
+      const hit = existing.data.find(c =>
+        lower(c.name) === lower(trimmed) ||
+        (short_name && lower(c.short_name) === lower(short_name)) ||
+        (code && lower(c.code) === lower(code)));
+      if (hit) return { ok: true, data: hit, deduped: true };
+    }
+
+    return DB.call(
+      DB.get().from('customers')
+        .insert({ name: trimmed, short_name, code, is_active: true })
+        .select()
+        .single()
+    );
+  }
+
+  return { list, search, displayName, match, create };
 })();

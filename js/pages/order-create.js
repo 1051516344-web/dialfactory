@@ -90,6 +90,12 @@ const OrderCreatePage = (() => {
             ? `<select id="form-customer" class="form-select">${custOptions}</select>`
             : `<input type="text" id="form-customer-text" class="form-input" placeholder="输入客户名称" value="${escapeHTML(formData.customer_name || '')}">`
           }
+          ${unmatchedName
+            ? `<button class="btn btn-ghost btn-sm" style="margin-top:var(--space-xs);"
+                       onclick="OrderCreatePage.archiveCustomer()">
+                 ＋ 把「${escapeHTML(unmatchedName)}」归档为新客户
+               </button>`
+            : ''}
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
@@ -189,6 +195,25 @@ const OrderCreatePage = (() => {
 
     step = 2;
     renderStep2(container);
+  }
+
+  /** 把 OCR 识别到但未建档的客户名，一键归档为 customers 记录并回填选中 */
+  async function archiveCustomer() {
+    const name = (formData.customer_name || '').trim();
+    if (!name) return;
+
+    const created = await CustomersAPI.create({ name });
+    if (!created.ok) { Toast.error(created.error || '归档失败'); return; }
+
+    // 刷新客户缓存 + 回填选中（重名时 create 会返回已存在档案）
+    const refreshed = await CustomersAPI.list();
+    if (refreshed.ok) customerList = refreshed.data;
+    formData.customer_id = created.data.id;
+    formData.customer_name = '';
+    Toast.success(created.deduped
+      ? '该客户已存在，已自动选中'
+      : '已归档客户：' + (created.data.short_name || created.data.name));
+    renderStep1(document.getElementById('page-container'), customerList);
   }
 
   function renderStep2(container) {
@@ -417,5 +442,5 @@ const OrderCreatePage = (() => {
     return DOM.escapeHtml(str);
   }
 
-  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onOrderFileSelected };
+  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onOrderFileSelected, archiveCustomer };
 })();

@@ -48,13 +48,17 @@ const OrderCreate = (() => {
       due_date:      formData.due_date,
       base_texture:  formData.base_texture || null,
       // C7: orders.specs JSONB keys — registered contract (see Freeze manifest):
-      //   customer_order_no / order_quantity_raw
+      //   customer_order_no / order_quantity_raw / customer_name_raw
       //   + drawing_name / drawing_path (set later by StorageAPI.uploadDrawing)
       // Note: plate_color / base_plate_color are NOT collected at creation —
       //   colors live in the customer drawing, not order base info.
       specs:         {
         customer_order_no: formData.customer_order_no || null,
-        order_quantity_raw: formData.order_quantity_raw || null
+        order_quantity_raw: formData.order_quantity_raw || null,
+        // 兜底：OCR 识别到但未建档的客户名（customer_id 为空时保留原文，避免丢失）
+        customer_name_raw: (!formData.customer_id && formData.customer_name)
+          ? (String(formData.customer_name).trim() || null)
+          : null
       },
       route_id:      formData.route_id || null,
       route_snapshot: snapshot,
