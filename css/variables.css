@@ -1,0 +1,61 @@
+/* ============================================================
+   DialFactory V1 · CSS Custom Properties
+   ============================================================ */
+
+:root {
+  /* Status Colors */
+  --color-active:     #3B82F6;
+  --color-done:       #10B981;
+  --color-paused:     #F59E0B;
+  --color-waiting:    #9CA3AF;
+  --color-danger:     #EF4444;
+
+  /* Status Backgrounds */
+  --bg-active:        #DBEAFE;
+  --bg-done:          #D1FAE5;
+  --bg-paused:        #FEF3C7;
+  --bg-waiting:       #F3F4F6;
+  --bg-danger:        #FEE2E2;
+
+  /* Rework */
+  --color-rework-1:   #FFF7ED;
+  --color-rework-2:   #FFEDD5;
+  --color-rework-3:   #FED7AA;
+
+  /* Surfaces */
+  --bg-page:          #F9FAFB;
+  --bg-card:          #FFFFFF;
+  --bg-input:         #FFFFFF;
+  --bg-muted:         #F3F4F6;
+
+  /* Text */
+  --text-primary:     #111827;
+  --text-secondary:   #6B7280;
+  --text-muted:       #9CA3AF;
+
+  /* Spacing */
+  --space-xs:         4px;
+  --space-sm:         8px;
+  --space-md:         16px;
+  --space-lg:         24px;
+  --space-xl:         32px;
+
+  /* Typography */
+  --font-size-sm:     0.875rem;
+  --font-size-base:   1rem;
+  --font-size-lg:     1.25rem;
+  --font-size-xl:     1.5rem;
+
+  /* Border */
+  --radius-sm:        4px;
+  --radius-md:        8px;
+  --radius-lg:        12px;
+
+  /* Shadow */
+  --shadow-card:      0 1px 3px rgba(0,0,0,0.1);
+  --shadow-dialog:    0 4px 12px rgba(0,0,0,0.15);
+
+  /* Layout */
+  --nav-height:       56px;
+  --max-width:        960px;
+}
