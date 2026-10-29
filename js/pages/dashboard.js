@@ -161,6 +161,18 @@ const DashboardPage = (() => {
     `;
   }
 
+  /** 客户名展示：优先已建档档案，其次 OCR 原文（未建档），否则 — */
+  function customerNameHtml(o) {
+    const archived = o.customer?.short_name || o.customer?.name;
+    if (archived) return escapeHTML(archived);
+    const raw = o.specs?.customer_name_raw;
+    if (raw) {
+      return escapeHTML(raw)
+        + '<span style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-left:4px;">（未建档）</span>';
+    }
+    return '—';
+  }
+
   /** 一行式待办条目：订单号 · 客户简称 · 当前工序(部门) · 未推进时长 · 交期剩余 · (今日已巡) */
   function renderTodoRow(o, inspectedToday) {
     const s = o.stats || {};
@@ -179,7 +191,7 @@ const DashboardPage = (() => {
     return `
       <div class="todo-row${isInspected ? ' inspected' : ''}" onclick="Router.navigate('/orders/${o.id}')">
         <span class="todo-order-no">#${escapeHTML(o.order_no)}</span>
-        <span class="todo-customer">${escapeHTML(o.customer?.short_name || o.customer?.name || '—')}</span>
+        <span class="todo-customer">${customerNameHtml(o)}</span>
         <span class="todo-process">${escapeHTML(proc)}${pausedBadge}</span>
         <span class="todo-updated">${escapeHTML(stalledAgo(o.updated_at))}</span>
         <span class="todo-due${dueCls}">${d == null ? '—' : escapeHTML(Format.dueDays(o.due_date))}</span>

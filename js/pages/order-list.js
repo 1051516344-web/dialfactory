@@ -247,6 +247,18 @@ const OrderListPage = (() => {
     `;
   }
 
+  /** 客户名展示：优先已建档档案，其次 OCR 原文（未建档），否则 — */
+  function customerNameHtml(order) {
+    const archived = order.customer?.short_name || order.customer?.name;
+    if (archived) return escapeHTML(archived);
+    const raw = order.specs?.customer_name_raw;
+    if (raw) {
+      return escapeHTML(raw)
+        + '<span style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-left:4px;">（未建档）</span>';
+    }
+    return '—';
+  }
+
   function renderOrderCard(order) {
     const s = order.stats || {};
     const specText = [order.base_texture, order.plate_color, order.specs?.base_plate_color].filter(Boolean).join('+') || '—';
@@ -271,7 +283,7 @@ const OrderListPage = (() => {
       <div class="card order-card" onclick="Router.navigate('/orders/${order.id}')">
         <div class="order-card-header">
           <span class="order-card-order-no">#${escapeHTML(order.order_no)}</span>
-          <span class="order-card-customer">${escapeHTML(order.customer?.short_name || order.customer?.name || '—')}</span>
+          <span class="order-card-customer">${customerNameHtml(order)}</span>
           ${custOrderNo ? `<span style="font-size:var(--font-size-xs);color:var(--text-secondary);">客单: ${escapeHTML(custOrderNo)}</span>` : ''}
           ${StatusBadge.render(derivedStatus)}
         </div>

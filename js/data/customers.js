@@ -57,8 +57,11 @@ const CustomersAPI = (() => {
     const trimmed = (name || '').trim();
     if (!trimmed) return { ok: false, error: `客户名称不能为空` };
 
-    // 去重：与现有档案按 name / short_name / code 精确比对（大小写不敏感）
-    const existing = await list();
+    // 去重：查「全表」（含已停用客户，不能只查 is_active=true），
+    // 否则会出现"停用了旧客户，又建出一个同名新客户"的脏数据。
+    const existing = await DB.call(
+      DB.get().from('customers').select('id, name, code, short_name')
+    );
     if (existing.ok && Array.isArray(existing.data)) {
       const lower = (v) => String(v || '').trim().toLowerCase();
       const hit = existing.data.find(c =>
