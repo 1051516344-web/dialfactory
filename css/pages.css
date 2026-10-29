@@ -148,6 +148,10 @@
 .todo-due.due-soon { color: #92400E; font-weight: 600; }
 .todo-due.due-over { color: var(--color-danger); font-weight: 600; }
 
+/* 今日已巡检：整行置灰（巡检是辅助标记，不改变「未推进时长」与排序主键） */
+.todo-row.inspected { opacity: 0.5; }
+.todo-row.inspected:hover { opacity: 0.85; }
+
 /* Route Confirm Step */
 .route-step-row {
   display: flex;

@@ -11,6 +11,7 @@ const OrderDetailPage = (() => {
   let currentProductionRecords = [];
   let currentBatches = [];
   let currentBatchRelations = [];
+  let currentLastInspection = null;   // 最近一次巡检记录 { inspected_at } 或 null
 
   async function render(orderId) {
     const container = document.getElementById('page-container');
@@ -41,15 +42,17 @@ const OrderDetailPage = (() => {
 
     // 异常 / 生产记录 / 批次互不依赖 → 三者并行，避免 3 次串行往返
     const nodeIds = currentNodeList.map(n => n.id);
-    const [er, pr, br] = await Promise.all([
+    const [er, pr, br, ins] = await Promise.all([
       nodeIds.length > 0
         ? ExceptionsAPI.listByNodeIds(nodeIds)
         : Promise.resolve({ ok: true, data: [] }),
       ProductionRecordsAPI.listByOrderId(orderId),
-      BatchesAPI.listByOrderId(orderId)
+      BatchesAPI.listByOrderId(orderId),
+      OrdersAPI.getLastInspection(orderId)
     ]);
     currentExceptions = er.ok ? er.data : [];
     currentProductionRecords = pr.ok ? pr.data : [];
+    currentLastInspection = ins.ok ? ins.data : null;
     if (br.ok) {
       currentBatches = br.data.batches || [];
       currentBatchRelations = br.data.relations || [];
@@ -84,6 +87,7 @@ const OrderDetailPage = (() => {
         <a href="#/orders" class="btn btn-ghost" style="font-size:0.85rem;">← 订单列表</a>
         <h1>#${escapeHTML(order.order_no)}</h1>
         <span id="order-status-badge">${StatusBadge.render(derivedStatus)}</span>
+        <span id="inspection-ctl" style="margin-left:auto;">${renderInspectionControl()}</span>
       </div>
 
       <div class="card">
@@ -574,20 +578,72 @@ const OrderDetailPage = (() => {
     if (!currentOrder || currentOrder.status === 'completed' || currentOrder.status === 'cancelled') return;
     const header = container.querySelector('.page-header');
     if (!header) return;
-    // Avoid duplicates
-    if (header.querySelector('button')) return;
+    // Avoid duplicates（注意：页头还有「确认巡检」按钮，不能用"有没有 button"来判断）
+    if (header.querySelector('#btn-cancel-order')) return;
     const cancelBtn = document.createElement('button');
+    cancelBtn.id = 'btn-cancel-order';
     cancelBtn.className = 'btn btn-danger btn-sm';
     cancelBtn.textContent = '取消订单';
     cancelBtn.style.cssText = 'margin-left:auto;font-size:0.8rem;';
     cancelBtn.onclick = onCancelOrder;
     header.appendChild(cancelBtn);
     const deleteBtn = document.createElement('button');
+    deleteBtn.id = 'btn-trial-delete';
     deleteBtn.className = 'btn btn-danger btn-sm';
     deleteBtn.textContent = '试运行清理';
     deleteBtn.style.cssText = 'margin-left:4px;font-size:0.8rem;background:#DC2626;';
     deleteBtn.onclick = onDeleteOrder;
     header.appendChild(deleteBtn);
+  }
+
+  // ==========================================================
+  // 巡检（辅助记录 · order_inspections）
+  // 不写 orders 表，因此不会刷新 updated_at，不影响「未推进时长」排序。
+  // ==========================================================
+  /** 页头巡检控件：今天已巡检 → 灰色小字；否则 → ghost 按钮（附上次巡检时间） */
+  function renderInspectionControl() {
+    const last = currentLastInspection?.inspected_at || null;
+    const lastText = last
+      ? `<span style="font-size:var(--font-size-xs);color:var(--text-secondary);">上次巡检：${escapeHTML(formatInspectedAt(last))}</span>`
+      : '';
+    // 今天已巡检：只留小字（极简，不再提供按钮）
+    if (last && isSameLocalDay(last, new Date())) return lastText;
+    return `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onMarkInspected()">确认巡检</button>`
+      + (lastText ? `<span style="margin-left:var(--space-sm);">${lastText}</span>` : '');
+  }
+
+  function refreshInspectionControl() {
+    const el = document.getElementById('inspection-ctl');
+    if (el) el.innerHTML = renderInspectionControl();
+  }
+
+  /** 确认巡检：追加一行记录 → 按钮消失，改为「上次巡检：今天 HH:mm」 */
+  async function onMarkInspected() {
+    if (!currentOrder) return;
+    const r = await OrdersAPI.markInspected(currentOrder.id);
+    if (!r.ok) { Toast.error(r.error || '记录巡检失败'); return; }
+    currentLastInspection = r.data;
+    refreshInspectionControl();
+    Toast.success('已记录巡检');
+  }
+
+  /** ISO → 「今天 09:30」/「昨天 15:00」/「10-24 09:30」 */
+  function formatInspectedAt(isoStr) {
+    if (!isoStr) return '—';
+    const d = new Date(isoStr);
+    const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+    const startYesterday = new Date(startToday.getTime() - 86400000);
+    if (d >= startToday) return '今天 ' + hhmm;
+    if (d >= startYesterday) return '昨天 ' + hhmm;
+    return `${d.getMonth() + 1}-${d.getDate()} ${hhmm}`;
+  }
+
+  function isSameLocalDay(a, b) {
+    const da = new Date(a), db = new Date(b);
+    return da.getFullYear() === db.getFullYear()
+      && da.getMonth() === db.getMonth()
+      && da.getDate() === db.getDate();
   }
 
   function escapeHTML(str) {
@@ -1088,5 +1144,5 @@ const OrderDetailPage = (() => {
     });
   }
 
-  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog, onSaveAsTemplate };
+  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog, onSaveAsTemplate, onMarkInspected };
 })();

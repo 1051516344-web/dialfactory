@@ -343,5 +343,40 @@ const OrdersAPI = (() => {
     return { ok: true };
   }
 
-  return { list, getById, getByOrderNo, getNodeStats, updateStatus, updateNode, insertNode, deleteNode, bumpSeq, createOrder, deleteOrder };
+  // ==========================================================
+  // 巡检记录（order_inspections）—— 辅助信息，不写 orders 表
+  // ==========================================================
+  /** 今天（含）之后已巡检的记录，用于首页「今日已巡」标记 */
+  async function listInspectedSince(sinceIso) {
+    return DB.call(
+      DB.get().from('order_inspections')
+        .select('order_id, inspected_at')
+        .gte('inspected_at', sinceIso)
+    );
+  }
+
+  /** 某订单最近一次巡检（详情页显示「上次巡检：…」） */
+  async function getLastInspection(orderId) {
+    return DB.call(
+      DB.get().from('order_inspections')
+        .select('id, order_id, inspected_at')
+        .eq('order_id', orderId)
+        .order('inspected_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    );
+  }
+
+  /** 记录一次巡检（追加一行） */
+  async function markInspected(orderId) {
+    return DB.call(
+      DB.get().from('order_inspections')
+        .insert({ order_id: orderId })
+        .select()
+        .single()
+    );
+  }
+
+  return { list, getById, getByOrderNo, getNodeStats, updateStatus, updateNode, insertNode, deleteNode, bumpSeq, createOrder, deleteOrder,
+           listInspectedSince, getLastInspection, markInspected };
 })();
