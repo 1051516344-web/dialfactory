@@ -68,15 +68,9 @@ const App = (() => {
       return;
     }
 
-    // Verify DB connection
-    const { ok, error } = await DB.call(
-      db.from('departments').select('count', { count: 'exact', head: true })
-    );
-    if (!ok) {
-      console.error('[DialFactory] DB connection failed:', error);
-    } else {
-      console.log('[DialFactory] DB connected, departments accessible');
-    }
+    // （已移除）原先这里额外发一次 departments count 请求做"连通性检查"，
+    // 但结果只用于 console.log —— 纯浪费一次串行往返，且阻塞首屏渲染。
+    // 真正的连接错误会在首个页面请求时由 DB.call 报出。
 
     // Register routes
     registerRoutes();
