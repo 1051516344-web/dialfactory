@@ -156,7 +156,7 @@ const DashboardPage = (() => {
     }
     return header + `
       <div class="card" style="padding:0;overflow:hidden;">
-        <div class="todo-list">${list.map(renderTodoRow).join('')}</div>
+        <div class="todo-list">${list.map(o => renderTodoRow(o)).join('')}</div>
       </div>
     `;
   }
