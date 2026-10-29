@@ -210,9 +210,16 @@ const OrderCreatePage = (() => {
     if (refreshed.ok) customerList = refreshed.data;
     formData.customer_id = created.data.id;
     formData.customer_name = '';
-    Toast.success(created.deduped
-      ? '该客户已存在，已自动选中'
-      : '已归档客户：' + (created.data.short_name || created.data.name));
+    // 三种结果分别提示：复活已停用档案 / 复用已有档案 / 新建档案
+    let toastMsg;
+    if (created.revived) {
+      toastMsg = '该客户原已停用，已自动恢复并选中';
+    } else if (created.deduped) {
+      toastMsg = '该客户已存在，已自动选中';
+    } else {
+      toastMsg = '已归档客户：' + (created.data.short_name || created.data.name);
+    }
+    Toast.success(toastMsg);
     renderStep1(document.getElementById('page-container'), customerList);
   }
 
