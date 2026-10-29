@@ -154,6 +154,8 @@ const DashboardPage = (() => {
     if (list.length === 0) {
       return header + EmptyState.render({ icon: '📅', title: '近 3 天无到期订单', desc: '没有需要催交期的在产订单。' });
     }
+    // 注意：必须用箭头函数包裹。直接把 renderTodoRow 交给 map，
+    // map 会把 index 作为第二参数传进去（历史上导致首页白屏）。
     return header + `
       <div class="card" style="padding:0;overflow:hidden;">
         <div class="todo-list">${list.map(o => renderTodoRow(o)).join('')}</div>
@@ -182,7 +184,9 @@ const DashboardPage = (() => {
       ? '<span class="badge badge-sm" style="background:var(--bg-paused);color:#92400E;margin-left:var(--space-xs);">⏸ 已暂停</span>'
       : '';
     // 巡检仅作辅助：今天已看过 → 整行置灰 + 右侧极小的绿色徽标（不参与时长展示）
-    const isInspected = !!(inspectedToday && inspectedToday.has(o.id));
+    // 防御：调用方可能误传（例如把本函数直接交给 Array.map，会收到 index 数字），
+    // 这里强校验 Set 类型 —— 辅助标记任何情况下都不允许把首页搞白屏。
+    const isInspected = !!(inspectedToday instanceof Set && inspectedToday.has(o.id));
     const inspectBadge = isInspected
       ? '<span class="badge badge-sm" style="background:#DCFCE7;color:#15803D;margin-left:var(--space-xs);white-space:nowrap;">✓ 今日已巡</span>'
       : '';
