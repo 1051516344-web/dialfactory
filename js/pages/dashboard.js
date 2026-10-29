@@ -52,9 +52,10 @@ const DashboardPage = (() => {
     const recentActivity = recentResult.ok ? (recentResult.data || []) : [];
     const todayDone = (todayResult.ok && todayResult.count) || 0;
 
-    // 今日已巡检的订单 id 集合（辅助标记：只影响排序分组与置灰，不改「未推进时长」）
-    const inspectedToday = new Set(
-      (inspResult.ok ? (inspResult.data || []) : []).map(r => r.order_id)
+    // 今日已巡检：Map<order_id, inspected_at>（辅助标记：只影响排序分组/置灰/徽标时间，
+    // 不改「未推进时长」；Map 与 Set 一样支持 .has() / .size，排序与汇总逻辑不变）
+    const inspectedToday = new Map(
+      (inspResult.ok ? (inspResult.data || []) : []).map(r => [r.order_id, r.inspected_at])
     );
 
     // 先排序截断，再只为「要显示的两份清单」取节点统计（≤ 13 单）
@@ -183,12 +184,13 @@ const DashboardPage = (() => {
     const pausedBadge = o.status === 'paused'
       ? '<span class="badge badge-sm" style="background:var(--bg-paused);color:#92400E;margin-left:var(--space-xs);">⏸ 已暂停</span>'
       : '';
-    // 巡检仅作辅助：今天已看过 → 整行置灰 + 右侧极小的绿色徽标（不参与时长展示）
+    // 巡检仅作辅助：今天已看过 → 整行置灰 + 右侧极小的绿色徽标（含巡检时刻）
     // 防御：调用方可能误传（例如把本函数直接交给 Array.map，会收到 index 数字），
-    // 这里强校验 Set 类型 —— 辅助标记任何情况下都不允许把首页搞白屏。
-    const isInspected = !!(inspectedToday instanceof Set && inspectedToday.has(o.id));
+    // 这里强校验 Map 类型 —— 辅助标记任何情况下都不允许把首页搞白屏。
+    const isInspected = !!(inspectedToday instanceof Map && inspectedToday.has(o.id));
     const inspectBadge = isInspected
-      ? '<span class="badge badge-sm" style="background:#DCFCE7;color:#15803D;margin-left:var(--space-xs);white-space:nowrap;">✓ 今日已巡</span>'
+      ? '<span class="badge badge-sm" style="background:#DCFCE7;color:#15803D;margin-left:var(--space-xs);white-space:nowrap;">✓ '
+        + escapeHTML(hhmm(inspectedToday.get(o.id))) + ' 已巡</span>'
       : '';
     const d = dueDiffDays(o.due_date);
     const dueCls = d == null ? '' : (d < 0 ? ' due-over' : (d <= 3 ? ' due-soon' : ''));
@@ -207,6 +209,13 @@ const DashboardPage = (() => {
   // ==========================================================
   // 小工具
   // ==========================================================
+  /** ISO → 本地 HH:mm（巡检徽标用，如 09:30） */
+  function hhmm(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
   /** 今天本地 0 点的 ISO 字符串（查询「今日已巡检」用） */
   function startOfTodayIso() {
     const d = new Date();
