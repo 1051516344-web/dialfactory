@@ -47,9 +47,14 @@ const OrderListPage = (() => {
       ${Skeleton.cards(5)}
     `;
 
-    // Await dept cache + fetch filters data + orders in parallel
-    const [custResult, ordersResult] = await Promise.all([
-      CustomersAPI.list(),
+    // 工序筛选所需的活跃记录与订单列表无依赖 → 提前并行发起，避免串行等待
+    const activeRecordsPromise = currentFilters.process
+      ? ProductionRecordsAPI.listActive()
+      : Promise.resolve(null);
+
+    // 并行：订单列表 + 部门缓存
+    // （不再调 CustomersAPI.list()：卡片的客户名来自 list() 的 customer:customers(...) join）
+    const [ordersResult] = await Promise.all([
       OrdersAPI.list({ ...currentFilters, page: 0 }),
       deptCachePromise || Promise.resolve()
     ]);
@@ -68,12 +73,11 @@ const OrderListPage = (() => {
       return;
     }
 
-    const customers = custResult.ok ? custResult.data : [];
     let orders = ordersResult.data || [];
     totalCount = ordersResult.count || 0;
 
-    // Phase 4: Process filter — client-side (applied per page)
-    orders = await filterByProcess(orders);
+    // Phase 4: Process filter — client-side（复用上面已并行发起的结果）
+    orders = filterByProcess(orders, await activeRecordsPromise);
     if (seq !== renderSeq) return;
 
     allOrders = orders;
@@ -97,13 +101,13 @@ const OrderListPage = (() => {
     allOrders = enriched;
 
     // Render
-    renderFull(container, enriched, customers);
+    renderFull(container, enriched);
   }
 
-  /** Client-side process filter — returns orders with an active record of that process. */
-  async function filterByProcess(orders) {
+  /** Client-side process filter — prResult 由调用方并行发起 listActive() 后传入。 */
+  function filterByProcess(orders, prResult) {
     if (!currentFilters.process) return orders;
-    const { ok, data: prData } = await ProductionRecordsAPI.listActive();
+    const { ok, data: prData } = prResult || {};
     if (!ok || !prData) return orders;
     const matchingOrderIds = new Set(
       prData.filter(r => r.process_name === currentFilters.process).map(r => r.order_id)
@@ -191,7 +195,8 @@ const OrderListPage = (() => {
     const { ok, data: orders } = await OrdersAPI.list({ ...currentFilters, page: currentPage });
     if (!ok || !orders || orders.length === 0) return;
 
-    let newOrders = await filterByProcess(orders);
+    const prResult = currentFilters.process ? await ProductionRecordsAPI.listActive() : null;
+    const newOrders = filterByProcess(orders, prResult);
 
     const orderIds = newOrders.map(o => o.id);
     const statsResult = await OrdersAPI.getNodeStats(orderIds);
@@ -207,10 +212,10 @@ const OrderListPage = (() => {
     allOrders.sort(sortOrders);
 
     const container = document.getElementById('page-container');
-    renderFull(container, allOrders, []);
+    renderFull(container, allOrders);
   }
 
-  function renderFull(container, orders, _customers) {
+  function renderFull(container, orders) {
     if (orders.length === 0) {
       container.innerHTML = `
         <div class="page-header">

@@ -39,21 +39,17 @@ const OrderDetailPage = (() => {
     currentNodeList = order.nodes || [];
     currentOrder.nodes = currentNodeList; // keep in sync
 
-    // Load exceptions
+    // 异常 / 生产记录 / 批次互不依赖 → 三者并行，避免 3 次串行往返
     const nodeIds = currentNodeList.map(n => n.id);
-    if (nodeIds.length > 0) {
-      const er = await ExceptionsAPI.listByNodeIds(nodeIds);
-      currentExceptions = er.ok ? er.data : [];
-    } else {
-      currentExceptions = [];
-    }
-
-    // Phase 4: Load production records
-    const pr = await ProductionRecordsAPI.listByOrderId(orderId);
+    const [er, pr, br] = await Promise.all([
+      nodeIds.length > 0
+        ? ExceptionsAPI.listByNodeIds(nodeIds)
+        : Promise.resolve({ ok: true, data: [] }),
+      ProductionRecordsAPI.listByOrderId(orderId),
+      BatchesAPI.listByOrderId(orderId)
+    ]);
+    currentExceptions = er.ok ? er.data : [];
     currentProductionRecords = pr.ok ? pr.data : [];
-
-    // Phase 4 (Batch layer): Load batches + split relations
-    const br = await BatchesAPI.listByOrderId(orderId);
     if (br.ok) {
       currentBatches = br.data.batches || [];
       currentBatchRelations = br.data.relations || [];

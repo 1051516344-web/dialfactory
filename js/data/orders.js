@@ -61,7 +61,8 @@ const OrdersAPI = (() => {
         db.from('orders')
           .select('id,order_no,customer_id,order_qty,due_date,base_texture,plate_color,specs,route_snapshot,status,note,created_at,updated_at, customer:customers(name, short_name)')
           .eq('id', orderId)
-          .single()
+          // maybeSingle：id 不存在时返回 data=null，而不是 406（PGRST116）
+          .maybeSingle()
       ),
       DB.call(
         db.from('order_nodes')
@@ -72,6 +73,7 @@ const OrdersAPI = (() => {
     ]);
 
     if (!orderResult.ok) return orderResult;
+    if (!orderResult.data) return { ok: false, error: '订单不存在或已被删除' };
 
     return {
       ok: true,
