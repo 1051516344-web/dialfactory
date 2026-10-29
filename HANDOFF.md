@@ -1,6 +1,8 @@
 # DialFactory V1 工作交接总结
 
-> 更新日期：2026-08-12
+> 更新日期：2026-10-29
+>
+> 最新一轮变更见 §9「本轮关键变更（2026-10-29）」
 
 ## 1. 项目概览
 
@@ -89,6 +91,15 @@ P39 外发批面；制二 P40 电镀外发；制三 P41 印刷外发；制四 P4
 
 验证：`SELECT count(*) FROM processes WHERE is_active = true;` → 应为 **42**（原 35 + 7）。
 
+**迁移 015**（巡检记录表 —— **已执行** ✅）：
+
+文件：`supabase/migrations/015_add_order_inspections.sql`
+
+内容：新建 `order_inspections`（巡检记录，独立于 `orders`，避免污染 `updated_at`）+ 2 个索引 +
+RLS（与 009 一致，仅 authenticated 可读写）。
+
+验证：`SELECT count(*) FROM order_inspections;` → 能正常返回（初期为 0）。
+
 ## 7. 如何在台式电脑继续
 
 1. **克隆仓库**：
@@ -122,3 +133,43 @@ P39 外发批面；制二 P40 电镀外发；制三 P41 印刷外发；制四 P4
    曾漏掉 `onActivate` 导出，导致按钮点击直接 `TypeError`（表现为"按钮点不动"、无任何提示）。
    检查方法：正则收集 `XxxPage\.(\w+)\(` 的全部引用，与最后一个 `return {...};` 的键比对，**差集必须为空**。
 
+## 9. 本轮关键变更（2026-10-29）
+
+### 9.1 新增巡检表（Migration 015）
+
+- 新建 `order_inspections` 独立表（`order_id` / `inspected_at` / `inspected_by` / `note`），
+  **刻意不与 `orders` 混为一张表**：`orders` 上有 `trg_orders_updated_at` 触发器，任何 UPDATE 都会把
+  `updated_at` 刷成 now()。若把巡检时间写进 `orders`，"刚巡检"会立刻变成"刚更新"，
+  直接破坏首页与订单列表页按 `updated_at` 升序的「未推进时长」排序。
+- 迁移文件：`supabase/migrations/015_add_order_inspections.sql`（RLS 与 009 一致；`ON DELETE CASCADE` 随订单清理）。
+- 详情页页头新增 ghost 按钮「确认巡检」→ 写入一行记录后按钮消失，改为灰色小字
+  「上次巡检：今天 09:30」。**巡检只记录"看过了"这个动作，不改变物理推进时间**。
+
+### 9.2 首页待巡检清单逻辑
+
+- 排序：**今日未巡检优先 > 同组内 `updated_at` 升序**（停留最久排最前）。
+- 今日已巡检的订单：整行置灰（`opacity: .5`）+ 右侧绿色小徽标 **`✓ HH:mm 已巡`**。
+- 汇总行增加「**今日已巡检 X/Y**」。
+- 行内时间列文案由「N 天未更新」改为「**N 天未推进**」（口径仍是 `orders.updated_at`）。
+- 已巡检集合用 `Map<order_id, inspected_at>`（`.has()` / `.size` 与 Set 等价）；
+  `renderTodoRow` 内做 `instanceof Map` 防御，误传非 Map 也不会白屏。
+
+### 9.3 OCR 客户建档逻辑
+
+- `CustomersAPI.create()`：按 `name / short_name / code` 精确去重（大小写不敏感）→ `deduped: true`。
+- **查重范围扩大到已停用客户**（不再用只返回 `is_active=true` 的 `list()`）；命中停用档案时
+  **自动复活**（`UPDATE is_active = true`）并返回 `revived: true`，解决「档案已存在但下拉框选不到」的死锁。
+- 建单 Step1：OCR 未建档时显示「＋ 把「xxx」归档为新客户」，一键归档并自动选中；
+  Toast 分三种（复活 / 已存在 / 新建）。
+- 订单 `specs.customer_name_raw` 兜底保存 OCR 原文；订单列表与首页客户列回退显示
+  `xxx（未建档）`，不再显示 `—`。
+
+### 9.4 前端性能与报错修复
+
+- 修复 `renderDueSoon` 中 `list.map(renderTodoRow)` 的隐式传参：`Array.map` 会把 `index` 作为第二参数
+  传入，导致 `renderTodoRow` 的 `inspectedToday` 收到数字、调用 `.has()` 抛 `TypeError` 使首页白屏。
+  改为 `list.map(o => renderTodoRow(o))`，并加注释说明该坑。
+- 订单列表页：删除无效的 `CustomersAPI.list()` 请求（客户名来自 `list()` 的 `customer` join）；
+  `OrdersAPI.getById` 改用 `maybeSingle()`，修复打开不存在订单时触发的 **406**（PGRST116）。
+- 首屏：30 个 IIFE 脚本由链式串行加载改为 `Promise.all` 并行；删除启动时仅用于 `console.log` 的
+  departments count 请求；订单详情页的异常 / 生产记录 / 批次三个请求改为并行。
