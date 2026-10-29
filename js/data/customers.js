@@ -59,8 +59,9 @@ const CustomersAPI = (() => {
 
     // 去重：查「全表」（含已停用客户，不能只查 is_active=true），
     // 否则会出现"停用了旧客户，又建出一个同名新客户"的脏数据。
+    // 注意必须把 is_active 一起查出来，用于命中后判断是否需要复活。
     const existing = await DB.call(
-      DB.get().from('customers').select('id, name, code, short_name')
+      DB.get().from('customers').select('id, name, code, short_name, is_active')
     );
     if (existing.ok && Array.isArray(existing.data)) {
       const lower = (v) => String(v || '').trim().toLowerCase();
@@ -68,7 +69,22 @@ const CustomersAPI = (() => {
         lower(c.name) === lower(trimmed) ||
         (short_name && lower(c.short_name) === lower(short_name)) ||
         (code && lower(c.code) === lower(code)));
-      if (hit) return { ok: true, data: hit, deduped: true };
+      if (hit) {
+        // 命中已停用档案 → 自动复活。
+        // 否则下拉框（只列 is_active=true）依然选不到它，形成"已存在但不可选"的死锁。
+        if (hit.is_active === false) {
+          const revived = await DB.call(
+            DB.get().from('customers')
+              .update({ is_active: true })
+              .eq('id', hit.id)
+              .select()
+              .single()
+          );
+          if (!revived.ok) return { ok: false, error: revived.error || '客户档案已停用，恢复失败' };
+          return { ok: true, data: revived.data, deduped: true, revived: true };
+        }
+        return { ok: true, data: hit, deduped: true };
+      }
     }
 
     return DB.call(
