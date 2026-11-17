@@ -100,6 +100,17 @@ RLS（与 009 一致，仅 authenticated 可读写）。
 
 验证：`SELECT count(*) FROM order_inspections;` → 能正常返回（初期为 0）。
 
+**迁移 016**（新增工序「切窗」—— **已执行** ✅）：
+
+文件：`supabase/migrations/016_add_process_cut_window.sql`
+
+内容：向 `processes` 新增 **P43 切窗**（制一 · 加工 · `is_required=false` · `is_active=true`）。
+编码顺延至 P43（迁移 014 已用至 P42；`order_nodes.process_code` 存历史快照，一律不重编号）。
+type 取「加工」而非「检验」，避免触发「完成节点必填产出数量」的强制校验。
+前端零改动：新建订单第 2 步按 `default_dept_id` 自动归入「制一」分组。
+
+验证：`SELECT count(*) FROM processes WHERE is_active = true;` → 应为 **43**（原 42 + 1）。
+
 ## 7. 如何在台式电脑继续
 
 1. **克隆仓库**：
