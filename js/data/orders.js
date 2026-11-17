@@ -72,8 +72,36 @@ const OrdersAPI = (() => {
       )
     ]);
 
-    if (!orderResult.ok) return orderResult;
-    if (!orderResult.data) return { ok: false, error: '订单不存在或已被删除' };
+    // 失败必须分成两类：① 请求真的报错（权限/JWT/网络）② 请求成功但 0 行。
+    // 绝不能再把二者都当成"订单不存在"。
+    if (!orderResult.ok) {
+      const msg = String(orderResult.error || '');
+      const isAuthIssue = /jwt|token|auth|permission|denied|policy|rls|anon/i.test(msg);
+      return {
+        ok: false,
+        phase: isAuthIssue ? 'auth' : 'query',
+        error: isAuthIssue ? '登录状态异常或无权读取该订单：' + msg : msg
+      };
+    }
+    if (!orderResult.data) {
+      // 0 行且无报错：RLS 拦截不会返回 error，只会返回空集（关键坑）。
+      // 先确认会话，再用「能否读到任意订单」做一次探针，区分权限问题与真的不存在。
+      const session = await DB.awaitSession();
+      if (!session) {
+        return { ok: false, phase: 'auth', error: '登录状态未就绪或已过期（未检测到有效会话），请刷新后重新登录' };
+      }
+      const probe = await DB.call(
+        DB.get().from('orders').select('id', { count: 'exact', head: true })
+      );
+      if (probe.ok && (probe.count || 0) === 0) {
+        return { ok: false, phase: 'auth', error: '当前登录身份读不到任何订单（疑似会话/权限异常），请刷新或重新登录后重试' };
+      }
+      const hasNodes = nodesResult.ok && Array.isArray(nodesResult.data) && nodesResult.data.length > 0;
+      if (hasNodes) {
+        return { ok: false, phase: 'data', error: '订单数据读取异常（检测到该订单的工序记录，但读不到订单主体），请刷新重试' };
+      }
+      return { ok: false, phase: 'not_found', error: '订单不存在或已被删除（' + orderId + '）' };
+    }
 
     return {
       ok: true,

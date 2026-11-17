@@ -56,16 +56,23 @@ const App = (() => {
       return;
     }
 
-    // Auth gate — require an authenticated user (R1)
+    // Auth gate — R1：先「等会话从本地存储恢复完成」，再校验用户 token。
+    // 若跳过这一步，后续 REST 可能以 anon 身份发出，被 RLS 静默过滤成 0 行
+    // （表现就是"订单不存在"，实际是请求没带上 JWT）。
+    let session = null;
+    try {
+      session = await DB.awaitSession();
+    } catch (e) {
+      console.warn('[DialFactory] awaitSession failed:', e);
+    }
     let user = null;
     try {
       user = await DB.getUser();
     } catch (e) {
       console.warn('[DialFactory] Auth check failed:', e);
     }
-    if (!user) {
-      // 登录前不复原深层链接：统一落到首页，避免登录后直接进入已删除订单等失效页面
-      history.replaceState(null, '', '#/');
+    if (!session || !user) {
+      // 不做静默跳转：保留用户原本的目标地址，登录成功后仍可回到该页面
       Login.render();
       return;
     }
