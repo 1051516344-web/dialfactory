@@ -64,6 +64,8 @@ const App = (() => {
       console.warn('[DialFactory] Auth check failed:', e);
     }
     if (!user) {
+      // 登录前不复原深层链接：统一落到首页，避免登录后直接进入已删除订单等失效页面
+      history.replaceState(null, '', '#/');
       Login.render();
       return;
     }
@@ -77,6 +79,12 @@ const App = (() => {
 
     // Mount navigation
     NavBar.mount();
+
+    // 启动时规范空 hash / 裸 # → #/：保证任何情况下都平稳落在首页，
+    // 而不是把浏览器记住的失效链接当成首屏内容。
+    if (!window.location.hash || window.location.hash === '#') {
+      history.replaceState(null, '', '#/');
+    }
 
     // Start router
     Router.start();

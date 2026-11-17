@@ -25,14 +25,34 @@ const OrderDetailPage = (() => {
     // Load data
     const { ok, data: order, error } = await OrdersAPI.getById(orderId);
     if (!ok) {
+      // 订单不存在（常见于浏览器恢复了已删除订单的旧链接）→ 落地页 + 3 秒自动回首页
       container.innerHTML = `
         <div class="page-header"><h1>订单详情</h1></div>
         <div class="card" style="text-align:center;padding:var(--space-xl);">
           <p style="font-size:2rem;">⚠️</p>
           <p style="color:var(--color-danger);">${escapeHTML(error)}</p>
-          <button class="btn btn-primary" style="margin-top:var(--space-md);" onclick="history.back()">返回</button>
+          <p style="color:var(--text-secondary);font-size:var(--font-size-sm);margin-top:var(--space-sm);">
+            该订单可能已被删除，或链接已失效。
+          </p>
+          <div style="display:flex;gap:var(--space-sm);justify-content:center;margin-top:var(--space-md);">
+            <a href="#/" class="btn btn-primary">返回首页</a>
+            <a href="#/orders" class="btn btn-ghost">订单列表</a>
+          </div>
+          <p id="auto-redirect-hint" style="color:var(--text-secondary);font-size:var(--font-size-xs);margin-top:var(--space-sm);">
+            3 秒后自动返回首页…
+          </p>
         </div>
       `;
+      // 自动返回：带 hash 守卫 —— 用户若已自行导航，就不再打扰
+      const entryHash = window.location.hash;
+      let remain = 3;
+      const hint = document.getElementById('auto-redirect-hint');
+      const timer = setInterval(() => {
+        if (window.location.hash !== entryHash) { clearInterval(timer); return; }
+        remain -= 1;
+        if (remain <= 0) { clearInterval(timer); Router.navigate('/'); return; }
+        if (hint) hint.textContent = remain + ' 秒后自动返回首页…';
+      }, 1000);
       return;
     }
 
