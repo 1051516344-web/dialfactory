@@ -21,22 +21,22 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # R5: stage ONLY the web assets — do not publish source, docs, or binaries
-      # 注意：sw.js / manifest.webmanifest / icons 必须发布到 _site 根目录，
-      # 否则 Service Worker 与 PWA 清单会 404，缓存无法生效。
+      # PWA 已于 2026-11-18 回滚：不再发布 manifest.webmanifest / icons。
+      # 但仍需发布 sw.js —— 它是 Kill Switch，用于覆盖安装并注销用户浏览器里残留的旧 SW；
+      # 待确认线上客户端都清理完毕后，可再把 sw.js 从本行移除。
       - name: Stage web assets
         run: |
           mkdir -p _site
-          cp -r index.html css js sw.js manifest.webmanifest icons _site/
+          cp -r index.html css js sw.js _site/
 
-      # 关键资源存在性校验：缺任何一个都可能导致首屏白屏或 PWA 失效
+      # 关键资源存在性校验：缺任何一个都可能导致首屏白屏
       - name: Verify critical assets
         run: |
           test -f _site/index.html
           test -f _site/js/vendor/supabase.min.js
           test -f _site/sw.js
-          test -f _site/manifest.webmanifest
-          test -f _site/icons/icon-192.png
-          test -f _site/icons/icon-512.png
+          test ! -f _site/manifest.webmanifest   # 确认已不再发布
+          test ! -d _site/icons                  # 确认已不再发布
 
       - name: Enable GitHub Pages (auto-configure)
         run: |

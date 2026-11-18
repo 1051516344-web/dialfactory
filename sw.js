@@ -1,103 +1,57 @@
 /* ============================================================
-   DialFactory · Service Worker（PWA 静态缓存）
+   DialFactory · Service Worker【停用开关 / Kill Switch】
    ------------------------------------------------------------
-   目标：国内网络下，第二次及以后的打开几乎不再请求 GitHub Pages。
+   2026-11-18：PWA 缓存上线后，国内网络下反而更卡（SW 拦截 + 缓存写入开销
+   大于收益），因此停用 Service Worker 缓存。
 
-   缓存策略：
-     ① 同源静态资源（html / css / js / vendor / icons）→ cache-first
-        （未命中时联网取回并写入缓存，后续命中即本地返回）
-     ② Supabase 的任何请求（REST / Auth / Storage / Edge Functions）
-        → network-only，**绝不缓存业务数据**
-     ③ 其它第三方域 → 直连，不拦截、不缓存
+   ⚠️ 为什么不能直接删掉 sw.js？
+     旧版 SW 对**导航请求**也是 cache-first，会把缓存里的旧 index.html 一直
+     返回给用户 —— 新的 index.html（含注销脚本）根本没机会执行，
+     用户会被永久锁在旧版本上。
 
-   版本控制：
-     - 改动前端代码后，**必须把 VERSION 改成新值**（例如 v2026-11-18-02）。
-     - 浏览器发现 sw.js 字节变化 → 安装新 SW → activate 时删除所有旧缓存
-       → 通知已打开的页面「系统已更新，请刷新页面」。
-     - VERSION 不变则永远命中旧缓存，用户看不到更新。
+   ✅ 正确做法（本文件）：保留一个"自杀式" SW。
+     浏览器每次访问都会检查 sw.js 字节是否变化 → 发现变化 → 安装本 SW
+     → activate 阶段：清空所有缓存 → 注销自身 → 从此外层无 SW 拦截，
+     页面请求全部直连网络。用户刷新一次即回到最新版本。
+
+   后续清理：确认线上客户端都不再命中旧缓存后（约 1~2 周），
+   可安全删除本文件，并从 deploy.yml 的拷贝清单中移除 sw.js。
    ============================================================ */
 
-const VERSION = 'v2026-11-18-01';
-const CACHE_NAME = 'dialfactory-' + VERSION;
+const KILL_VERSION = 'kill-2026-11-18-01';
 
-/** 预缓存：应用外壳。其余同源资源在被请求时自动写入缓存（运行时缓存）。 */
-const PRECACHE_URLS = [
-  './',
-  './index.html',
-  './manifest.webmanifest',
-  './css/reset.css',
-  './css/variables.css',
-  './css/layout.css',
-  './css/components.css',
-  './css/flow.css',
-  './css/pages.css',
-];
-
-// ------------------------------------------------------------
-// install：预缓存外壳，并立即接管（不等旧标签页关闭）
-// ------------------------------------------------------------
-self.addEventListener('install', (event) => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    // cache: 'reload' 强制绕过 HTTP 缓存，保证拿到的是这次部署的文件
-    await cache.addAll(PRECACHE_URLS.map((url) => new Request(url, { cache: 'reload' })));
-    await self.skipWaiting();
-  })());
+self.addEventListener('install', () => {
+  // 立即接管，不等待旧标签页关闭
+  self.skipWaiting();
 });
 
-// ------------------------------------------------------------
-// activate：清掉所有旧版本缓存 → 接管页面 → 通知前端可刷新
-// ------------------------------------------------------------
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)));
-    await self.clients.claim();
-
-    const clients = await self.clients.matchAll({ type: 'window' });
-    for (const client of clients) {
-      client.postMessage({ type: 'SW_UPDATED', version: VERSION });
-    }
-  })());
-});
-
-// ------------------------------------------------------------
-// fetch：按来源分流
-// ------------------------------------------------------------
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  if (req.method !== 'GET') return; // POST/PATCH/DELETE 一律直连
-
-  let url;
-  try {
-    url = new URL(req.url);
-  } catch {
-    return;
-  }
-
-  // ① 业务数据绝不缓存（含 OCR Edge Function）
-  if (url.hostname === 'supabase.co' || url.hostname.endsWith('.supabase.co')) return;
-
-  // ② 其它跨域资源：直连，不进缓存
-  if (url.origin !== self.location.origin) return;
-
-  // ③ 同源静态资源：cache-first
-  event.respondWith((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(req);
-    if (cached) return cached;
-
+    // 1) 清空所有缓存（含旧版 dialfactory-*）
     try {
-      const res = await fetch(req);
-      if (res && res.ok) cache.put(req, res.clone());
-      return res;
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
     } catch (err) {
-      // 离线时，导航请求回退到缓存的 shell
-      if (req.mode === 'navigate') {
-        const shell = (await cache.match('./index.html')) || (await cache.match('./'));
-        if (shell) return shell;
+      console.warn('[SW-KILL] 清空缓存失败:', err && err.message);
+    }
+
+    // 2) 注销自身：从此外层不再有 Service Worker
+    try {
+      await self.registration.unregister();
+    } catch (err) {
+      console.warn('[SW-KILL] 注销失败:', err && err.message);
+    }
+
+    // 3) 通知已打开的页面（新页面不处理该消息，仅老页面可能收到）
+    try {
+      const clients = await self.clients.matchAll({ type: 'window' });
+      for (const client of clients) {
+        client.postMessage({ type: 'SW_KILLED', version: KILL_VERSION });
       }
-      throw err;
+    } catch (err) {
+      /* ignore */
     }
   })());
 });
+
+// 刻意不注册 fetch 监听：本版本不拦截、不缓存任何请求。

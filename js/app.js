@@ -101,30 +101,9 @@ const App = (() => {
       NavBar.refresh();
     });
 
-    // PWA：监听 Service Worker 版本更新（sw.js 的 activate 阶段会 postMessage）
-    initServiceWorkerNotice();
+    // （已回滚）原先这里初始化 PWA 的 SW 更新提示；PWA 因性能回退于 2026-11-18 停用。
 
     console.log('[DialFactory] V1 Ready');
-  }
-
-  /**
-   * PWA：Service Worker 更新提示。
-   * - 首次安装（页面尚无 controller）不提示，避免第一次访问就弹「已更新」；
-   * - 后续 VERSION 变化 → 新 SW 接管 → 收到 SW_UPDATED → 提示刷新，避免新旧资源混用。
-   */
-  function initServiceWorkerNotice() {
-    if (!('serviceWorker' in navigator)) return;
-    const hadController = !!navigator.serviceWorker.controller;
-
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      if (!e.data || e.data.type !== 'SW_UPDATED') return;
-      if (!hadController) return;
-      if (window.Toast && typeof Toast.info === 'function') {
-        Toast.info('系统已更新，请刷新页面');
-      } else {
-        console.info('[PWA] 系统已更新，请刷新页面', e.data.version);
-      }
-    });
   }
 
   return { init };
