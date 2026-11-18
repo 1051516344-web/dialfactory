@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DialFactory V1</title>
 
+  <!-- PWA：可添加到主屏幕 + 主题色 -->
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="theme-color" content="#0F172A">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
   <!-- CSS -->
   <link rel="stylesheet" href="css/reset.css">
   <link rel="stylesheet" href="css/variables.css">
@@ -129,6 +134,21 @@
     }
 
     loadNext(0);
+  </script>
+
+  <!-- PWA：注册 Service Worker（同源静态资源 cache-first；Supabase 业务数据绝不缓存）。
+       版本更新提示逻辑在 js/app.js（监听 SW 的 SW_UPDATED 消息）。 -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').then(function (reg) {
+          // 主动检查一次更新：sw.js 里 VERSION 变化时会触发 install/activate
+          reg.update().catch(function () {});
+        }).catch(function (err) {
+          console.warn('[PWA] Service Worker 注册失败:', err && err.message);
+        });
+      });
+    }
   </script>
 </body>
 </html>

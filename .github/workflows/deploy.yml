@@ -21,15 +21,22 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # R5: stage ONLY the web assets — do not publish source, docs, or binaries
+      # 注意：sw.js / manifest.webmanifest / icons 必须发布到 _site 根目录，
+      # 否则 Service Worker 与 PWA 清单会 404，缓存无法生效。
       - name: Stage web assets
         run: |
           mkdir -p _site
-          cp -r index.html css js _site/
+          cp -r index.html css js sw.js manifest.webmanifest icons _site/
 
-      # js/vendor/ 随 js/ 一起发布（vendor 已在 js 下）。这里显式校验一次，
-      # 防止将来调整目录结构导致线上 404 —— 那会直接造成首屏白屏。
-      - name: Verify vendored assets
-        run: test -f _site/js/vendor/supabase.min.js
+      # 关键资源存在性校验：缺任何一个都可能导致首屏白屏或 PWA 失效
+      - name: Verify critical assets
+        run: |
+          test -f _site/index.html
+          test -f _site/js/vendor/supabase.min.js
+          test -f _site/sw.js
+          test -f _site/manifest.webmanifest
+          test -f _site/icons/icon-192.png
+          test -f _site/icons/icon-512.png
 
       - name: Enable GitHub Pages (auto-configure)
         run: |
