@@ -36,6 +36,11 @@
     </main>
   </div>
 
+  <!-- Supabase SDK（本地 vendor）：原先由 import map 指向 https://esm.sh，
+       它是首屏唯一的第三方跨境依赖，国内经常拖慢/超时，导致整页卡在 import 上。
+       本地化后首屏不再有任何第三方请求。版本见 js/vendor/README.md。 -->
+  <script src="js/vendor/supabase.min.js"></script>
+
   <!-- JS Infrastructure (IIFE pattern, order matters) -->
   <script src="js/config.js"></script>
   <script src="js/utils/dom.js"></script>
@@ -43,15 +48,6 @@
   <script src="js/utils/router.js"></script>
   <script src="js/components/skeleton.js"></script>
   <script src="js/components/nav-bar.js"></script>
-
-  <!-- Import Map for Supabase SDK -->
-  <script type="importmap">
-  {
-    "imports": {
-      "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
-    }
-  }
-  </script>
 
   <!-- Error display if module fails -->
   <script>
@@ -63,10 +59,8 @@
     }, true);
   </script>
 
-  <!-- App Boot -->
-  <script type="module">
-    import { createClient } from '@supabase/supabase-js';
-    window.supabase = { createClient };
+  <!-- App Boot（经典脚本：Supabase SDK 已由 js/vendor/supabase.min.js 注入 window.supabase） -->
+  <script>
 
     // Chain-load scripts in dependency order
     const scripts = [
