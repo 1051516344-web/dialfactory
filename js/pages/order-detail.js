@@ -25,32 +25,19 @@ const OrderDetailPage = (() => {
     // Load data
     const { ok, data: order, error, phase } = await OrdersAPI.getById(orderId);
     if (!ok) {
-      // 失败分三类：登录/权限异常、数据读取异常、确实不存在。
-      // 不再一律说"订单不存在"，也【不做任何静默跳转】。
-      const kind = phase === 'auth' ? 'auth' : (phase === 'not_found' ? 'not_found' : 'query');
-      const title = kind === 'auth' ? '登录状态异常'
-        : (kind === 'not_found' ? '订单不存在或已被删除' : '订单读取失败');
-      const desc = kind === 'auth'
-        ? '当前登录身份可能已过期或无权读取该订单，请刷新页面（必要时重新登录）后重试。'
-        : (kind === 'not_found'
-          ? '该订单可能已被删除，或链接已失效。'
-          : '请求失败，可能是网络波动或服务端异常，请稍后重试。');
-      container.innerHTML = `
-        <div class="page-header"><h1>订单详情</h1></div>
-        <div class="card" style="text-align:center;padding:var(--space-xl);">
-          <p style="font-size:2rem;">${kind === 'not_found' ? '🗂️' : '⚠️'}</p>
-          <p style="font-weight:600;margin-bottom:var(--space-xs);">${title}</p>
-          <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">${desc}</p>
-          <p style="color:var(--text-secondary);font-size:var(--font-size-xs);margin-top:var(--space-sm);word-break:break-all;">
-            详情：${escapeHTML(error)}
-          </p>
-          <div style="display:flex;gap:var(--space-sm);justify-content:center;margin-top:var(--space-md);">
-            ${kind === 'not_found' ? '' : '<button class="btn btn-primary" onclick="location.reload()">刷新页面</button>'}
-            <a href="#/" class="btn ${kind === 'not_found' ? 'btn-primary' : 'btn-ghost'}">返回首页</a>
-            <a href="#/orders" class="btn btn-ghost">订单列表</a>
-          </div>
-        </div>
-      `;
+      // 无效订单链接（已删除 / id 不存在 / 读取异常）：不渲染任何报错界面，
+      // 直接瞬间返回首页。用户明确要求：不要任何"订单不存在"的提示卡片、不要倒计时、不要 Toast。
+      console.warn('[OrderDetail] 订单加载失败，静默返回首页：', phase, error);
+
+      if (phase === 'auth') {
+        // 唯一例外：登录/权限异常不是"订单不存在"，必须让用户知道（否则会误以为订单丢了）
+        Toast.error('登录状态异常，请重新登录');
+        Login.render();
+        return;
+      }
+
+      // not_found / data / query 一律静默跳首页
+      Router.navigate('/');
       return;
     }
 
