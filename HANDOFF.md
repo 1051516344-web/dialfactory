@@ -1,8 +1,10 @@
 # DialFactory V1 工作交接总结
 
-> 更新日期：2026-10-29
+> 更新日期：2026-11-18
 >
-> 最新一轮变更见 §9「本轮关键变更（2026-10-29）」
+> 🔴🔴🔴 **每次改前端代码，都必须同步修改 `sw.js` 里的 `VERSION` —— 详见 §8.2【致命警告】**
+>
+> 历史变更见 §9「本轮关键变更（2026-10-29）」、§10「本轮关键变更（2026-11-18）」
 
 ## 1. 项目概览
 
@@ -121,6 +123,7 @@ type 取「加工」而非「检验」，避免触发「完成节点必填产出
 3. **执行未跑的迁移** — 见上一步
 4. **本地预览** — 用任意静态服务器（如 VS Code Live Server）打开，或直接访问线上网址
 5. 改完代码 `git commit` + `git push`，GitHub Actions 自动部署到 Pages
+   ⚠️ **被 PWA 缓存接管后，发版流程多一步：先把 `sw.js` 里的 `VERSION` 改成新值**（见 §8.2）
 
 ## 8. 开发规范（踩坑记录）
 
@@ -143,6 +146,49 @@ type 取「加工」而非「检验」，避免触发「完成节点必填产出
 3. **导出闭环检查**：页面的 `onclick="XxxPage.onFoo(...)"` 与 IIFE 末尾 `return { ... }` 必须对照检查。
    曾漏掉 `onActivate` 导出，导致按钮点击直接 `TypeError`（表现为"按钮点不动"、无任何提示）。
    检查方法：正则收集 `XxxPage\.(\w+)\(` 的全部引用，与最后一个 `return {...};` 的键比对，**差集必须为空**。
+
+### 🔴🔴🔴 8.2【致命警告】每次改前端代码，必须修改 `sw.js` 里的 `VERSION`
+
+> # ⚠️ 发版必须 bump VERSION
+>
+> **由于引入了 PWA (Service Worker)，以后任何一次前端代码更新，必须修改 `sw.js` 中的
+> `VERSION` 变量（例如从 `v2026-11-18-01` 改成 `v2026-11-18-02`）。**
+>
+> **否则用户的浏览器会永远从本地缓存加载旧代码，导致更新失效！**
+
+**位置**：`sw.js` 顶部 ——
+
+```js
+const VERSION = 'v2026-11-18-01';   // ← 每次发版 +1（日期-序号 或 递增序号均可）
+```
+
+**为什么必须改**：Service Worker 对同源静态资源（html / css / js / vendor / icons）采用
+**cache-first**。只有 `sw.js` 的字节发生变化，浏览器才会安装新 SW；新 SW 的 `activate`
+阶段才会删除旧缓存并通知页面刷新。`VERSION` 不变 → 缓存名不变 → 旧缓存永远命中。
+
+**正确发版流程（四步，缺一不可）**：
+
+1. 改业务代码（js / css / index.html）
+2. **把 `sw.js` 的 `VERSION` 改成新值**（例：`v2026-11-18-01` → `v2026-11-18-02`）
+3. `git add` → `commit` → `push`（Actions 自动部署，约 1–2 分钟）
+4. 用户下次打开：新 SW 接管 → 页面顶部提示「**系统已更新，请刷新页面**」→ 刷新即拿到新版本
+
+**忘记 bump 的后果（极难排查）**：
+
+- 用户在浏览器里看到的是**旧页面**，且**服务端没有任何报错**、Network 里甚至看不到新请求；
+- 典型症状："我明明改了/推了，怎么线上没变化？" —— 先怀疑 VERSION，再怀疑部署。
+
+**应急手段（临时让某个用户拿到新版）**：
+
+- 强刷：`Ctrl + Shift + R`（Mac：`Cmd + Shift + R`）
+- 或 F12 → **Application → Service Workers → Unregister**，再刷新
+- 或 F12 → Application → Cache Storage → 删除 `dialfactory-*` 缓存后刷新
+
+**发布清单自查（每次发版前问自己）**：
+
+- [ ] `sw.js` 的 `VERSION` 改了吗？
+- [ ] 若新增/改名了静态文件，`deploy.yml` 的 `cp -r …` 与 `Verify critical assets` 同步了吗？
+- [ ] 本地（`node serve.js` / `npx serve`）验证过控制台无报错吗？
 
 ## 9. 本轮关键变更（2026-10-29）
 
@@ -184,3 +230,28 @@ type 取「加工」而非「检验」，避免触发「完成节点必填产出
   `OrdersAPI.getById` 改用 `maybeSingle()`，修复打开不存在订单时触发的 **406**（PGRST116）。
 - 首屏：30 个 IIFE 脚本由链式串行加载改为 `Promise.all` 并行；删除启动时仅用于 `console.log` 的
   departments count 请求；订单详情页的异常 / 生产记录 / 批次三个请求改为并行。
+
+## 10. 本轮关键变更（2026-11-18）：国内加载速度优化（P0 + P1）
+
+### 10.1 P0 · 本地化第三方依赖（干掉 esm.sh）
+
+- 新增 `js/vendor/supabase.min.js`：`@supabase/supabase-js` **2.119.0** 的 **ESM 单文件 bundle**
+  （251.2 KB，0 个外部 import；仅删除了末尾 `sourceMappingURL` 一行）。版本/来源/SHA-256 见 `js/vendor/README.md`。
+- `index.html` 的 import map 由 `https://esm.sh/@supabase/supabase-js@2` 改为 `./js/vendor/supabase.min.js`，
+  启动脚本仍是 `import { createClient } from '@supabase/supabase-js'`。
+- 收益：**首屏不再有任何第三方域请求**（原先 esm.sh 卡住会阻塞全部 30+ 个业务脚本）；版本锁定不再漂移。
+
+### 10.2 P1 · PWA（Service Worker 静态缓存）
+
+| 文件 | 作用 |
+|---|---|
+| `sw.js` | 同源静态资源 cache-first；**`supabase.co` 全部请求 network-only（业务数据绝不缓存）**；非 GET 直连 |
+| `manifest.webmanifest` | PWA 清单（`start_url: ./#/`、`display: standalone`），手机可「添加到主屏幕」 |
+| `icons/icon-192.png`、`icon-512.png` | PWA 图标 |
+| `index.html` | head 引入 manifest/theme-color/apple-touch-icon；`load` 后注册 SW + `reg.update()` |
+| `js/app.js` | `initServiceWorkerNotice()`：收到 `SW_UPDATED` 且非首装时 Toast「系统已更新，请刷新页面」 |
+| `.github/workflows/deploy.yml` | 发布清单加入 `sw.js` / `manifest.webmanifest` / `icons`，并逐个校验 6 个关键资源 |
+
+- 收益：**第二次及以后打开几乎不再请求 GitHub Pages**（静态资源全部本地命中）。
+- ⚠️ **代价：每次发版必须 bump `sw.js` 的 `VERSION`，否则更新失效 —— 见 §8.2【致命警告】**。
+- 已知边界：SW 只在 HTTPS 或 localhost 生效（`file://` 直接打开不生效）；首次访问仍需下载全部资源。
