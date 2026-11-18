@@ -4,6 +4,8 @@
 
 const App = (() => {
 
+  let authStateBound = false;   // 登录态订阅只绑一次，避免重复监听
+
   function registerRoutes() {
     // P1 · Dashboard ✅ D-2
     Router.on('/', async () => {
@@ -65,13 +67,14 @@ const App = (() => {
     } catch (e) {
       console.warn('[DialFactory] awaitSession failed:', e);
     }
-    let user = null;
-    try {
-      user = await DB.getUser();
-    } catch (e) {
-      console.warn('[DialFactory] Auth check failed:', e);
-    }
-    if (!session || !user) {
+    // ⚠️ 关键：必须区分「确实未登录」与「弱网导致校验失败」。
+    // 后者若直接渲染登录页，用户会误以为账号失效（实测反馈：输对密码也报错）。
+    const userState = await DB.getUserState();
+    if (!userState.user) {
+      if (userState.networkError || navigator.onLine === false) {
+        renderNetworkError();
+        return;
+      }
       // 不做静默跳转：保留用户原本的目标地址，登录成功后仍可回到该页面
       Login.render();
       return;
@@ -101,9 +104,40 @@ const App = (() => {
       NavBar.refresh();
     });
 
-    // （已回滚）原先这里初始化 PWA 的 SW 更新提示；PWA 因性能回退于 2026-11-18 停用。
+    // 登录态变化：弱网误发的 SIGNED_OUT 已在 DB 层过滤，只有真正登出才回登录页
+    if (!authStateBound) {
+      authStateBound = true;
+      DB.onAuthStateChangeSafe((event) => {
+        if (event === 'SIGNED_OUT') Login.render();
+      });
+    }
 
     console.log('[DialFactory] V1 Ready');
+  }
+
+  /**
+   * 弱网 / 离线落地面：明确告知是「网络问题」而不是「账号问题」，并提供重试。
+   * 不渲染登录页 —— 否则用户会以为自己被登出、反复输密码。
+   */
+  function renderNetworkError() {
+    const container = document.getElementById('page-container');
+    if (!container) return;
+    const nav = document.getElementById('nav-container');
+    if (nav) nav.innerHTML = '';
+    container.innerHTML = `
+      <div class="card" style="text-align:center;max-width:440px;margin:10vh auto 0;padding:var(--space-xl);">
+        <p style="font-size:2rem;">📡</p>
+        <p style="font-weight:600;margin-bottom:var(--space-xs);">网络连接异常</p>
+        <p style="color:var(--text-secondary);font-size:var(--font-size-sm);line-height:1.6;">
+          无法连接服务器，请检查 Wi-Fi / 移动数据后重试。<br>
+          你的登录状态不会因此失效，网络恢复后无需重新登录。
+        </p>
+        <button class="btn btn-primary" style="margin-top:var(--space-md);" onclick="location.reload()">重新连接</button>
+      </div>
+    `;
+    if (window.Toast && typeof Toast.error === 'function') {
+      Toast.error('网络连接异常，请检查网络后刷新页面');
+    }
   }
 
   return { init };

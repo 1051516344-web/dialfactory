@@ -50,7 +50,15 @@ const Login = (() => {
       errEl.textContent = '';
       const { error } = await DB.signIn(email, password);
       if (error) {
-        errEl.textContent = error.message || '登录失败';
+        // 关键：弱网下 signIn 会抛 fetch / timeout，绝不能误报成「账号或密码错误」
+        const raw = String(error.message || error || '');
+        const isNet = (typeof DB.isNetworkError === 'function' && DB.isNetworkError(error))
+          || /failed to fetch|network|timeout|timed out|load failed|offline/i.test(raw);
+        const msg = isNet
+          ? '网络连接异常，无法连接服务器，请检查网络'
+          : (/invalid login credentials/i.test(raw) ? '账号或密码错误' : (raw || '登录失败'));
+        errEl.textContent = msg;
+        if (window.Toast && typeof Toast.error === 'function') Toast.error(msg);
         btn.disabled = false;
         btn.textContent = '登录';
         return;
