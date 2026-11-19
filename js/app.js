@@ -43,48 +43,11 @@ const App = (() => {
     });
   }
 
-  async function init() {
-    console.log('[DialFactory] V1 Initializing...');
-
-    // Init Supabase
-    const db = DB.init();
-    if (!db) {
-      document.getElementById('page-container').innerHTML = `
-        <div class="card" style="text-align:center;margin-top:48px;">
-          <p style="font-size:1.5rem;margin-bottom:8px;">⚠️</p>
-          <p style="color:var(--color-danger);">无法连接到数据库。请检查网络后刷新。</p>
-        </div>
-      `;
-      return;
-    }
-
-    // Auth gate — R1：先「等会话从本地存储恢复完成」，再校验用户 token。
-    // 若跳过这一步，后续 REST 可能以 anon 身份发出，被 RLS 静默过滤成 0 行
-    // （表现就是"订单不存在"，实际是请求没带上 JWT）。
-    let session = null;
-    try {
-      session = await DB.awaitSession();
-    } catch (e) {
-      console.warn('[DialFactory] awaitSession failed:', e);
-    }
-    // ⚠️ 关键：必须区分「确实未登录」与「弱网导致校验失败」。
-    // 后者若直接渲染登录页，用户会误以为账号失效（实测反馈：输对密码也报错）。
-    const userState = await DB.getUserState();
-    if (!userState.user) {
-      if (userState.networkError || navigator.onLine === false) {
-        renderNetworkError();
-        return;
-      }
-      // 不做静默跳转：保留用户原本的目标地址，登录成功后仍可回到该页面
-      Login.render();
-      return;
-    }
-
-    // （已移除）原先这里额外发一次 departments count 请求做"连通性检查"，
-    // 但结果只用于 console.log —— 纯浪费一次串行往返，且阻塞首屏渲染。
-    // 真正的连接错误会在首个页面请求时由 DB.call 报出。
-
-    // Register routes
+  /**
+   * 挂载路由 / 导航 / 页面 —— **不含任何鉴权网络等待**。
+   * 抽出来的目的：有本地会话时可以立刻渲染首屏，把 token 校验丢到后台。
+   */
+  function startApp() {
     registerRoutes();
 
     // Mount navigation
@@ -113,6 +76,62 @@ const App = (() => {
     }
 
     console.log('[DialFactory] V1 Ready');
+  }
+
+  async function init() {
+    console.log('[DialFactory] V1 Initializing...');
+
+    // Init Supabase
+    const db = DB.init();
+    if (!db) {
+      document.getElementById('page-container').innerHTML = `
+        <div class="card" style="text-align:center;margin-top:48px;">
+          <p style="font-size:1.5rem;margin-bottom:8px;">⚠️</p>
+          <p style="color:var(--color-danger);">无法连接到数据库。请检查网络后刷新。</p>
+        </div>
+      `;
+      return;
+    }
+
+    // ==========================================================
+    // Auth gate（**不阻塞首屏**）
+    // ① 只等「本地会话」：getSession() 读本地存储，正常情况下不发网络请求（毫秒级）。
+    //    无会话 → 直接登录页（离线则网络提示），绝不为了确认登录态而空等。
+    // ② 有会话 → 立刻 startApp() 渲染页面；token 校验丢到后台异步跑。
+    //    校验只有「确实失效」才回登录页；网络失败一律不踢人。
+    // 收益：首屏少一个到东京的 RTT（实测 ttfb ≈ 0.32s，弱网可达数秒）。
+    // ==========================================================
+    let session = null;
+    try {
+      session = await DB.awaitSession();
+    } catch (e) {
+      console.warn('[DialFactory] awaitSession failed:', e);
+    }
+
+    if (!session) {
+      // 未登录 / 本地会话已丢失：用 navigator.onLine 这个零成本信号区分离线
+      if (navigator.onLine === false) {
+        renderNetworkError();
+        return;
+      }
+      // 不做静默跳转：保留用户原本的目标地址，登录成功后仍可回到该页面
+      Login.render();
+      return;
+    }
+
+    // 有会话：先渲染，不等网络
+    startApp();
+
+    // 后台校验 token（刻意不 await —— 不把 RTT 压在首屏上）
+    DB.getUserState().then((userState) => {
+      if (userState.user) return;
+      if (userState.networkError || navigator.onLine === false) {
+        console.warn('[DialFactory] 后台鉴权校验失败（网络原因），保持当前会话，不踢回登录页');
+        return;
+      }
+      console.warn('[DialFactory] 会话已失效，返回登录页');
+      Login.render();
+    }).catch((e) => console.warn('[DialFactory] 后台鉴权校验异常:', e));
   }
 
   /**

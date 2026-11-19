@@ -6,6 +6,21 @@
 
 const NodeActions = (() => {
 
+  /**
+   * 单 active 守卫（序列模型约束）：同一订单同一时刻只允许一个 active 节点。
+   * 返回 null 表示通过，否则返回错误对象。
+   *
+   * 背景（P0）：原先只有 activate() 有守卫，resume()/undo() 没有 ——
+   * 于是「暂停 A → 激活 B → 恢复 A」可以在 UI 上点出双 active，且无任何报错。
+   * 现在三个入口共用同一实现，杜绝该路径。
+   */
+  function guardSingleActive(order, nodeId) {
+    const running = (order.nodes || []).find(n => n.id !== nodeId && n.status === 'active');
+    if (!running) return null;
+    const label = running.process_code || running.process_name || '—';
+    return { ok: false, error: '已有进行中的工序（' + label + '），请先完成或暂停它', phase: 'forbidden' };
+  }
+
   // ==========================================================
   // M1 · advance — active → done
   // ==========================================================
@@ -61,7 +76,7 @@ const NodeActions = (() => {
     const nodesForStatus = activatedNode
       ? updatedNodes.map(n => n.id === activatedNode.id ? activatedNode : n)
       : updatedNodes;
-    const newStatus = OrderState.derive(nodesForStatus);
+    const newStatus = OrderState.derive(nodesForStatus, order.status);
     const r3 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r3.ok && !warning) warning = 'status_update_delayed';
 
@@ -85,7 +100,7 @@ const NodeActions = (() => {
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
-    const newStatus = OrderState.derive(updatedNodes);
+    const newStatus = OrderState.derive(updatedNodes, order.status);
     let warning = null;
     const r2 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r2.ok) warning = 'status_update_delayed';
@@ -100,6 +115,11 @@ const NodeActions = (() => {
     const v = NodeState.validate(node.status, 'active');
     if (!v.valid) return { ok: false, error: v.error, phase: 'primary' };
 
+    // P0 守卫：恢复 = 把节点变回 active，必须确保本单没有其它进行中节点，
+    // 否则「暂停 A → 激活 B → 恢复 A」会造出双 active（无任何报错）。
+    const guardErr = guardSingleActive(order, node.id);
+    if (guardErr) return guardErr;
+
     const r1 = await OrdersAPI.updateNode(node.id, {
       status: 'active',
       pause_reason: null
@@ -107,7 +127,7 @@ const NodeActions = (() => {
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
-    const newStatus = OrderState.derive(updatedNodes);
+    const newStatus = OrderState.derive(updatedNodes, order.status);
     let warning = null;
     const r2 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r2.ok) warning = 'status_update_delayed';
@@ -123,18 +143,15 @@ const NodeActions = (() => {
     const v = NodeState.validate(node.status, 'active');
     if (!v.valid) return { ok: false, error: v.error, phase: 'primary' };
 
-    // 顺序模型守卫：本单已有别的进行中节点时不允许再激活，避免出现两个 active
-    const running = (order.nodes || []).find(n => n.id !== node.id && n.status === 'active');
-    if (running) {
-      const label = running.process_code || running.process_name || '—';
-      return { ok: false, error: '已有进行中的工序（' + label + '），请先完成或暂停它', phase: 'forbidden' };
-    }
+    // 顺序模型守卫：复用 guardSingleActive（单点实现，与 resume/undo 一致）
+    const guardErr = guardSingleActive(order, node.id);
+    if (guardErr) return guardErr;
 
     const r1 = await OrdersAPI.updateNode(node.id, { status: 'active' });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
-    const newStatus = OrderState.derive(updatedNodes);
+    const newStatus = OrderState.derive(updatedNodes, order.status);
     let warning = null;
     const r2 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r2.ok) warning = 'status_update_delayed';
@@ -187,7 +204,7 @@ const NodeActions = (() => {
 
     // Update order status
     const allNodes = [...nodes, newNode];
-    const newStatus = OrderState.derive(allNodes);
+    const newStatus = OrderState.derive(allNodes, order.status);
     const r3 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r3.ok && !warning) warning = 'status_update_delayed';
 
@@ -254,7 +271,7 @@ const NodeActions = (() => {
 
     // Update order status
     const allNodes = [...nodes, newNode];
-    const newStatus = OrderState.derive(allNodes);
+    const newStatus = OrderState.derive(allNodes, order.status);
     const r3 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r3.ok && !warning) warning = 'status_update_delayed';
 
@@ -311,6 +328,13 @@ const NodeActions = (() => {
     };
     const action = undoMap[node.status];
     if (!action) return { ok: false, error: '当前状态不支持撤销', phase: 'primary' };
+
+    // P0 守卫：done/paused → active 会把节点重新变回进行中，
+    // 若本单已有其它 active 节点，撤销会造成双 active，必须拒绝。
+    if (action.target === 'active') {
+      const guardErr = guardSingleActive(order, node.id);
+      if (guardErr) return guardErr;
+    }
 
     // F4/F6: check downstream
     if (action.cascade) {
@@ -440,7 +464,7 @@ const NodeActions = (() => {
 
     // 删除后用「去掉该节点」的数组重新推导订单状态
     const remaining = (order.nodes || []).filter(n => n.id !== node.id);
-    const newStatus = OrderState.derive(remaining);
+    const newStatus = OrderState.derive(remaining, order.status);
     let warning = null;
     const r2 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r2.ok) warning = 'status_update_delayed';
