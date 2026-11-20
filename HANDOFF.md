@@ -1,269 +1,384 @@
-# DialFactory V1 工作交接总结
+# DialFactory V1 · 工作交接文档
 
-> 更新日期：2026-11-18
+> **更新日期：2026-11-19**
+> **当前 HEAD：`b4558d9`**（`main`，已推送，工作区干净）
+> **线上地址：https://1051516344-web.github.io/dialfactory/**
 >
-> ⛔ **2026-11-18：PWA(Service Worker) 已回滚停用**（性能回退，见 §8.2 / §10.2）。
-> 原「必须 bump VERSION」的警告随之**失效**，当前发版流程无需再改 VERSION。
->
-> 历史变更见 §9「本轮关键变更（2026-10-29）」、§10「本轮关键变更（2026-11-18）」
+> 本文档面向「换一台电脑接手开发」的场景：读完 §1-§6 即可开工，§7-§10 是规范与近期变更，
+> §11 是待办，§12 是每次发版后的验收清单。
+
+---
 
 ## 1. 项目概览
 
-**DialFactory** — 广州表盘厂的生产追踪单页应用（SPA），用于订单、工序、生产记录、异常、路线模板的管理。目前处于**试运行阶段**。
+**DialFactory** — 广州表盘厂的生产追踪单页应用（SPA）。管理订单、工序流转、生产记录、异常事件、
+路线模板、分批、巡检。目前处于**试运行阶段**，实际用户在工厂内 3~5 台终端上使用（手机 + 台式机）。
 
-## 2. 技术栈
+**当前状态：可用、稳定**。近期完成了一轮「稳定性排雷 + 死代码清理」，未引入任何构建工具，
+仍是纯原生零配置架构。
+
+---
+
+## 2. 技术栈（刻意保持简单）
 
 | 项目 | 说明 |
-|------|------|
-| 前端 | 原生 HTML/CSS/JS，**无框架**，hash 路由 |
-| 架构 | IIFE 模块模式 `const Xxx = (() => {...})()` |
-| 后端 | Supabase（PostgreSQL + REST API） |
-| 部署 | GitHub Pages 自动部署 |
+|---|---|
+| 前端 | 原生 HTML / CSS / JS，**无框架、无构建工具、无 npm 依赖** |
+| 模块模式 | IIFE 单例：`const Xxx = (() => { ... return {...}; })();` |
+| 路由 | 自研 hash 路由（`js/utils/router.js`），`#/orders/:id` 风格 |
+| 后端 | Supabase（PostgreSQL + PostgREST + Auth + Storage） |
+| 第三方库 | 仅 `@supabase/supabase-js`，**已本地内置**（`js/vendor/supabase.min.js`，见 §10.1） |
+| 部署 | GitHub Actions → GitHub Pages（推送 `main` 自动部署，约 1~2 分钟） |
+
+---
 
 ## 3. 关键连接信息
 
 | 项 | 值 |
-|----|----|
-| **Supabase 项目** | `wzfkmwrqnvjegunjueka`（ap-northeast-1 东京区） |
-| **GitHub 仓库** | `https://github.com/1051516344-web/dialfactory`（分支 `main`） |
-| **线上网址** | `https://1051516344-web.github.io/dialfactory/` |
-| **API 密钥** | 在 `js/config.js` 里（`CONFIG.SUPABASE_URL` / `CONFIG.SUPABASE_ANON_KEY`） |
-
-> ⚠️ 迁移脚本（SQL）不会自动执行，需要你在 **Supabase Dashboard → SQL Editor** 手动运行。
-
-## 4. 代码库结构（关键文件）
-
-```
-DialFactory/
-├── index.html              # 入口，脚本按顺序链式加载
-├── js/
-│   ├── config.js           # Supabase URL + anon key
-│   ├── app.js              # 路由注册（Router.on）
-│   ├── data/               # 数据层（DB.call 封装）
-│   │   ├── client.js       # DB 单例（init/get/call）
-│   │   ├── orders.js
-│   │   ├── production-records.js
-│   │   ├── route-templates.js   # 路线模板 API（签名去重）
-│   │   └── ...
-│   ├── domain/             # 业务逻辑（order-state、node-state等）
-│   ├── components/         # UI 组件（nav-bar、status-badge等）
-│   └── pages/              # 页面（dashboard、order-create、route-templates等）
-├── css/pages.css
-└── supabase/migrations/    # 所有 SQL 迁移（需手动执行）
-    ├── 004_route_templates.sql
-    ├── 005_add_duration_minutes.sql
-    └── 006_route_template_signature.sql
-```
-
-**核心 API 封装**：`DB.call(promise)` 把 Supabase 响应规范成 `{ ok, data, count }` 或 `{ ok: false, error }`。
-
-## 5. 近期完成的工作（Phase 4）
-
-1. **路线模板自动沉淀** — 创建订单时自动保存工序路线为模板
-2. **签名去重优化** — 用 `route_signature`（如 `冲板-切窗-电镀-QC`）作为唯一标识，相同路线不新建模板，只 `used_count +1` + 追加关联订单
-3. **模板名称可编辑** — 点击名称/✎ 行内编辑，`Enter` 保存，`Escape` 取消
-4. **仪表盘改名** — "生产驾驶舱" → "生产明细"
-5. **修复 duration_minutes 缺列** — migration 005
-6. **数据清理** — 删除了误录的测试订单 #R46197 及其 14 条生产记录、Route-001 模板
-
-## 6. ⚠️ 待办事项（重要）
-
-在 Supabase SQL Editor 手动运行以下迁移（若尚未执行）：
-
-**迁移 005**（修复生产完成报错）：
-```sql
-ALTER TABLE production_records ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
-NOTIFY pgrst, 'reload schema';
-```
-
-**迁移 006**（路线模板签名）：
-```sql
-ALTER TABLE process_route_templates ADD COLUMN IF NOT EXISTS route_signature TEXT;
-ALTER TABLE process_route_templates ADD COLUMN IF NOT EXISTS associated_orders JSONB DEFAULT '[]';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_route_signature ON process_route_templates(route_signature);
-NOTIFY pgrst, 'reload schema';
-```
-
-**迁移 014**（新增 7 道采购/外发工序，P36–P42 —— **已执行** ✅）：
-
-文件：`supabase/migrations/014_add_outsourcing_processes.sql`
-
-内容：往 `processes` 表插入 7 条工序（制一 P36 采购粗胚 / P37 外发焊脚 / P38 外发车床 /
-P39 外发批面；制二 P40 电镀外发；制三 P41 印刷外发；制四 P42 点夜光外发），
-`type='辅助'`、`is_required=false`、`is_active=true`；逐行幂等（`WHERE NOT EXISTS (code)`）。
-
-验证：`SELECT count(*) FROM processes WHERE is_active = true;` → 应为 **42**（原 35 + 7）。
-
-**迁移 015**（巡检记录表 —— **已执行** ✅）：
-
-文件：`supabase/migrations/015_add_order_inspections.sql`
-
-内容：新建 `order_inspections`（巡检记录，独立于 `orders`，避免污染 `updated_at`）+ 2 个索引 +
-RLS（与 009 一致，仅 authenticated 可读写）。
-
-验证：`SELECT count(*) FROM order_inspections;` → 能正常返回（初期为 0）。
-
-**迁移 016**（新增工序「切窗」—— **已执行** ✅）：
-
-文件：`supabase/migrations/016_add_process_cut_window.sql`
-
-内容：向 `processes` 新增 **P43 切窗**（制一 · 加工 · `is_required=false` · `is_active=true`）。
-编码顺延至 P43（迁移 014 已用至 P42；`order_nodes.process_code` 存历史快照，一律不重编号）。
-type 取「加工」而非「检验」，避免触发「完成节点必填产出数量」的强制校验。
-前端零改动：新建订单第 2 步按 `default_dept_id` 自动归入「制一」分组。
-
-验证：`SELECT count(*) FROM processes WHERE is_active = true;` → 应为 **43**（原 42 + 1）。
-
-## 7. 如何在台式电脑继续
-
-1. **克隆仓库**：
-   ```bash
-   git clone https://github.com/1051516344-web/dialfactory.git
-   ```
-2. **确认 Supabase 凭证** — 看 `js/config.js`（已经提交到仓库里，克隆后即有）
-3. **执行未跑的迁移** — 见上一步
-4. **本地预览** — 用任意静态服务器（如 VS Code Live Server）打开，或直接访问线上网址
-5. 改完代码 `git commit` + `git push`，GitHub Actions 自动部署到 Pages
-   （PWA 已于 2026-11-18 回滚，发版无需再改 `sw.js` 的 VERSION；详见 §8.2 历史记录）
-
-## 8. 开发规范（踩坑记录）
-
-### 8.1 改「结构相似」的领域函数后，必须跑行为测试
-
-**背景（2026-10-26，订单 R46500 排查）**：`js/domain/node-actions.js` 中 `rework()` 与 `append()` 的
-`Gap-based seq → insertNode({...})` 这一段**文本几乎完全相同**（唯一差别是 `process_id`
-分别取 `parentNode.process_id` / `proc.id`）。用文本锚点做替换时，第一个匹配总是命中 `rework()`，
-结果 `const initialStatus = ...` 落在了 `rework()` 里，而使用处 `status: initialStatus` 落在了
-`append()` 里 —— **`node --check` 完全看不出问题**（语法合法），直到运行 `append()` 才抛
-`ReferenceError: initialStatus is not defined`。
-
-**规范（改领域层 / 批量替换时必须遵守）**：
-
-1. **锚点唯一性**：替换前先统计每个 old 片段在文件中的出现次数，**必须恰好 1 次**（0 次或 >1 次直接报错停止）；
-   锚点要包含能区分兄弟函数的行（如 `process_id:   proc.id` vs `parentNode.process_id`）。
-2. **行为验证**：改完用 mock 依赖跑一遍真实函数（mock `OrdersAPI` / `ProcessesAPI`）。
-   注意 mock 必须**返回新对象、不修改入参内存**，否则复现不出真实 bug。
-   断言改动**落在正确的函数分支**里 —— 只有这样才发现"语法没错、但改错了函数"。
-3. **导出闭环检查**：页面的 `onclick="XxxPage.onFoo(...)"` 与 IIFE 末尾 `return { ... }` 必须对照检查。
-   曾漏掉 `onActivate` 导出，导致按钮点击直接 `TypeError`（表现为"按钮点不动"、无任何提示）。
-   检查方法：正则收集 `XxxPage\.(\w+)\(` 的全部引用，与最后一个 `return {...};` 的键比对，**差集必须为空**。
-
-### ⛔ 8.2【已失效 · 历史记录】PWA 的 `VERSION` 纪律（2026-11-18 已回滚）
-
-> **⛔ 本节警告已失效：PWA(Service Worker) 已于 2026-11-18 回滚停用。**
-> 回滚原因：上线后**国内网络反而更卡** —— SW 的请求拦截与缓存写入开销大于收益。
-> 回滚方式：页面侧主动 `unregister()` + 清空 Cache Storage；发布目录里保留一个
-> 「自杀式」`sw.js`（Kill Switch，activate 时清缓存并注销自身）以覆盖安装老用户的旧 SW。
->
-> **以下为历史记录**：若将来重新启用 PWA，务必恢复"每次发版 bump VERSION"的纪律，
-> 否则用户会永远加载本地旧缓存。**当前（已回滚）发版流程不需要改 VERSION。**
-
-> # ⚠️（历史）发版必须 bump VERSION
->
-> **由于引入了 PWA (Service Worker)，以后任何一次前端代码更新，必须修改 `sw.js` 中的
-> `VERSION` 变量（例如从 `v2026-11-18-01` 改成 `v2026-11-18-02`）。**
->
-> **否则用户的浏览器会永远从本地缓存加载旧代码，导致更新失效！**
-
-**位置**：`sw.js` 顶部 ——
-
-```js
-const VERSION = 'v2026-11-18-01';   // ← 每次发版 +1（日期-序号 或 递增序号均可）
-```
-
-**为什么必须改**：Service Worker 对同源静态资源（html / css / js / vendor / icons）采用
-**cache-first**。只有 `sw.js` 的字节发生变化，浏览器才会安装新 SW；新 SW 的 `activate`
-阶段才会删除旧缓存并通知页面刷新。`VERSION` 不变 → 缓存名不变 → 旧缓存永远命中。
-
-**正确发版流程（四步，缺一不可）**：
-
-1. 改业务代码（js / css / index.html）
-2. **把 `sw.js` 的 `VERSION` 改成新值**（例：`v2026-11-18-01` → `v2026-11-18-02`）
-3. `git add` → `commit` → `push`（Actions 自动部署，约 1–2 分钟）
-4. 用户下次打开：新 SW 接管 → 页面顶部提示「**系统已更新，请刷新页面**」→ 刷新即拿到新版本
-
-**忘记 bump 的后果（极难排查）**：
-
-- 用户在浏览器里看到的是**旧页面**，且**服务端没有任何报错**、Network 里甚至看不到新请求；
-- 典型症状："我明明改了/推了，怎么线上没变化？" —— 先怀疑 VERSION，再怀疑部署。
-
-**应急手段（临时让某个用户拿到新版）**：
-
-- 强刷：`Ctrl + Shift + R`（Mac：`Cmd + Shift + R`）
-- 或 F12 → **Application → Service Workers → Unregister**，再刷新
-- 或 F12 → Application → Cache Storage → 删除 `dialfactory-*` 缓存后刷新
-
-**发布清单自查（每次发版前问自己）**：
-
-- [ ] `sw.js` 的 `VERSION` 改了吗？
-- [ ] 若新增/改名了静态文件，`deploy.yml` 的 `cp -r …` 与 `Verify critical assets` 同步了吗？
-- [ ] 本地（`node serve.js` / `npx serve`）验证过控制台无报错吗？
-
-## 9. 本轮关键变更（2026-10-29）
-
-### 9.1 新增巡检表（Migration 015）
-
-- 新建 `order_inspections` 独立表（`order_id` / `inspected_at` / `inspected_by` / `note`），
-  **刻意不与 `orders` 混为一张表**：`orders` 上有 `trg_orders_updated_at` 触发器，任何 UPDATE 都会把
-  `updated_at` 刷成 now()。若把巡检时间写进 `orders`，"刚巡检"会立刻变成"刚更新"，
-  直接破坏首页与订单列表页按 `updated_at` 升序的「未推进时长」排序。
-- 迁移文件：`supabase/migrations/015_add_order_inspections.sql`（RLS 与 009 一致；`ON DELETE CASCADE` 随订单清理）。
-- 详情页页头新增 ghost 按钮「确认巡检」→ 写入一行记录后按钮消失，改为灰色小字
-  「上次巡检：今天 09:30」。**巡检只记录"看过了"这个动作，不改变物理推进时间**。
-
-### 9.2 首页待巡检清单逻辑
-
-- 排序：**今日未巡检优先 > 同组内 `updated_at` 升序**（停留最久排最前）。
-- 今日已巡检的订单：整行置灰（`opacity: .5`）+ 右侧绿色小徽标 **`✓ HH:mm 已巡`**。
-- 汇总行增加「**今日已巡检 X/Y**」。
-- 行内时间列文案由「N 天未更新」改为「**N 天未推进**」（口径仍是 `orders.updated_at`）。
-- 已巡检集合用 `Map<order_id, inspected_at>`（`.has()` / `.size` 与 Set 等价）；
-  `renderTodoRow` 内做 `instanceof Map` 防御，误传非 Map 也不会白屏。
-
-### 9.3 OCR 客户建档逻辑
-
-- `CustomersAPI.create()`：按 `name / short_name / code` 精确去重（大小写不敏感）→ `deduped: true`。
-- **查重范围扩大到已停用客户**（不再用只返回 `is_active=true` 的 `list()`）；命中停用档案时
-  **自动复活**（`UPDATE is_active = true`）并返回 `revived: true`，解决「档案已存在但下拉框选不到」的死锁。
-- 建单 Step1：OCR 未建档时显示「＋ 把「xxx」归档为新客户」，一键归档并自动选中；
-  Toast 分三种（复活 / 已存在 / 新建）。
-- 订单 `specs.customer_name_raw` 兜底保存 OCR 原文；订单列表与首页客户列回退显示
-  `xxx（未建档）`，不再显示 `—`。
-
-### 9.4 前端性能与报错修复
-
-- 修复 `renderDueSoon` 中 `list.map(renderTodoRow)` 的隐式传参：`Array.map` 会把 `index` 作为第二参数
-  传入，导致 `renderTodoRow` 的 `inspectedToday` 收到数字、调用 `.has()` 抛 `TypeError` 使首页白屏。
-  改为 `list.map(o => renderTodoRow(o))`，并加注释说明该坑。
-- 订单列表页：删除无效的 `CustomersAPI.list()` 请求（客户名来自 `list()` 的 `customer` join）；
-  `OrdersAPI.getById` 改用 `maybeSingle()`，修复打开不存在订单时触发的 **406**（PGRST116）。
-- 首屏：30 个 IIFE 脚本由链式串行加载改为 `Promise.all` 并行；删除启动时仅用于 `console.log` 的
-  departments count 请求；订单详情页的异常 / 生产记录 / 批次三个请求改为并行。
-
-## 10. 本轮关键变更（2026-11-18）：国内加载速度优化（P0 + P1）
-
-### 10.1 P0 · 本地化第三方依赖（干掉 esm.sh）
-
-- 新增 `js/vendor/supabase.min.js`：`@supabase/supabase-js` **2.119.0** 的 **ESM 单文件 bundle**
-  （251.2 KB，0 个外部 import；仅删除了末尾 `sourceMappingURL` 一行）。版本/来源/SHA-256 见 `js/vendor/README.md`。
-- `index.html` 的 import map 由 `https://esm.sh/@supabase/supabase-js@2` 改为 `./js/vendor/supabase.min.js`，
-  启动脚本仍是 `import { createClient } from '@supabase/supabase-js'`。
-- 收益：**首屏不再有任何第三方域请求**（原先 esm.sh 卡住会阻塞全部 30+ 个业务脚本）；版本锁定不再漂移。
-
-### 10.2 P1 · PWA（Service Worker 静态缓存）
-
-| 文件 | 作用 |
 |---|---|
-| `sw.js` | 同源静态资源 cache-first；**`supabase.co` 全部请求 network-only（业务数据绝不缓存）**；非 GET 直连 |
-| `manifest.webmanifest` | PWA 清单（`start_url: ./#/`、`display: standalone`），手机可「添加到主屏幕」 |
-| `icons/icon-192.png`、`icon-512.png` | PWA 图标 |
-| `index.html` | head 引入 manifest/theme-color/apple-touch-icon；`load` 后注册 SW + `reg.update()` |
-| `js/app.js` | `initServiceWorkerNotice()`：收到 `SW_UPDATED` 且非首装时 Toast「系统已更新，请刷新页面」 |
-| `.github/workflows/deploy.yml` | 发布清单加入 `sw.js` / `manifest.webmanifest` / `icons`，并逐个校验 6 个关键资源 |
+| Supabase 项目 ref | `wzfkmwrqnvjegunjueka`（**ap-northeast-1 东京区**） |
+| Supabase 控制台 | https://supabase.com/dashboard/project/wzfkmwrqnvjegunjueka |
+| GitHub 仓库 | https://github.com/1051516344-web/dialfactory （分支 `main`，**公开仓库**） |
+| 线上地址 | https://1051516344-web.github.io/dialfactory/ |
+| Supabase URL / anon key | 在 `js/config.js`（anon key 是公开密钥，可提交，**不是** service_role） |
 
-- 收益：**第二次及以后打开几乎不再请求 GitHub Pages**（静态资源全部本地命中）。
-- ⚠️ **代价：每次发版必须 bump `sw.js` 的 `VERSION`，否则更新失效 —— 见 §8.2【致命警告】**。
-- 已知边界：SW 只在 HTTPS 或 localhost 生效（`file://` 直接打开不生效）；首次访问仍需下载全部资源。
-- ⛔ **2026-11-18 回滚**：上线后国内网络**反而更卡**（请求拦截 + 缓存写入开销 > 收益），
-  已移除 SW 注册、manifest 与图标；`sw.js` 改为 Kill Switch 仅用于清残留缓存并注销自身。
-  **P0（本地 vendor supabase-js）保持不变**。
+### 3.1 需要人工确认的凭证（仓库里没有）
+
+- **登录账号**：`App.init()` 用 Supabase Auth 邮箱+密码登录。仓库里**没有**账号密码；
+  若丢失，去 Supabase → **Authentication → Users** 重置密码或新建用户。
+- **Edge Function Secrets**（OCR 相关，在 Supabase → Edge Functions → Secrets）：
+  `ALIYUN_ACCESS_KEY_ID` / `ALIYUN_ACCESS_KEY_SECRET` / `DASHSCOPE_API_KEY` /
+  `OCR_PROXY_URL` / `OCR_PROXY_KEY`。**绝不要写进前端代码**（已核查：仓库无云厂商密钥泄漏）。
+- **Cloudflare Worker**（OCR 代理）：源码在 `cloudflare/ocr-proxy-worker.js`（只是代理，不含密钥；
+  `PROXY_KEY` 通过 Worker 环境变量设置）。
+
+> ⚠️ 迁移 SQL **不会自动执行**，必须在 **Supabase Dashboard → SQL Editor** 手动运行（见 §6）。
+
+---
+
+## 4. 在另一台电脑上 5 分钟跑起来
+
+```bash
+git clone https://github.com/1051516344-web/dialfactory.git
+cd dialfactory
+```
+
+1. **本地预览**（必须用 HTTP，不要 `file://`，否则 import map / 模块会异常）
+   ```bash
+   npx serve .            # 或 python -m http.server 8080
+   ```
+   打开 `http://localhost:3000/`（端口按提示），用 Supabase 账号登录。
+   > 仓库根的 `serve.js` 是本地小工具，**已在 .gitignore 中**（不会提交、不会上线）。
+
+2. **确认凭证**：`js/config.js` 已含 URL + anon key，克隆后即可用。
+
+3. **确认数据库迁移**：见 §6 台账 —— 有 3 个迁移（017/018/019）需要确认是否已执行。
+
+4. **改代码 → 提交 → 自动部署**
+   ```bash
+   git add -A && git commit -m "..." && git push
+   ```
+   GitHub Actions（`.github/workflows/deploy.yml`）会：
+   `checkout` → 只暂存 `index.html css js sw.js` 到 `_site` → 校验关键资源存在 → 推送 `gh-pages`。
+   **注意**：发布白名单是刻意设计的（不发布 `docs/`、`supabase/`、`tools/`、`AI_CONTEXT/`）。
+   若新增了需要发布的根级文件，必须同步改 `deploy.yml`。
+
+5. **等待 1~2 分钟后**，用 **Ctrl+Shift+R 强刷**线上页面验证（Pages 有 10 分钟 HTTP 缓存，
+   弱网/缓存问题 90% 是没强刷）。
+
+---
+
+## 5. 代码库结构（关键文件）
+
+```
+dialfactory/
+├── index.html                 # 入口：6 个 CSS + 6 个静态 JS + import map(vendor) + 动态加载 31 个 JS
+├── js/
+│   ├── config.js              # Supabase URL/anon key、业务常量（状态标签、暂停原因…）
+│   ├── app.js                 # 启动引导：DB.init → 鉴权 → startApp()（路由注册/Nav/Router.start）
+│   ├── vendor/supabase.min.js # 本地内置的 supabase-js 2.119.0（ESM，见 README.md）
+│   ├── utils/                 # dom.js（仅 escapeHtml）、format.js、router.js
+│   ├── data/                  # 数据层：所有 SQL 请求都经 DB.call() 规范化
+│   │   ├── client.js          # DB 单例 + 网络错误分类 + 安全鉴权订阅
+│   │   ├── orders.js          # 订单/节点/巡检 API
+│   │   ├── production-records.js、batches.js、customers.js、exceptions.js、
+│   │   ├── processes.js、route-templates.js、storage.js、recognize.js
+│   ├── domain/                # 纯业务逻辑（无 DOM）
+│   │   ├── node-state.js      # 节点状态机 waiting/active/done/paused
+│   │   ├── node-actions.js    # advance/pause/resume/activate/rework/append/undo/removeNode
+│   │   ├── order-state.js     # orders.status 由节点派生（derive）
+│   │   ├── seq-calc.js、validation.js、batch-state.js、order-create.js
+│   ├── components/            # toast / confirm-dialog / empty-state / progress-bar /
+│   │                          # skeleton / status-badge / nav-bar / login
+│   └── pages/                 # dashboard(首页今日待办) / order-list / order-create /
+│                              # order-detail / route-templates / exception-list / batch-detail
+├── css/                       # reset / variables / layout / components / flow / pages
+├── sw.js                      # ⚠️ 仅为「Kill Switch」：清旧 SW 缓存并注销自身，不缓存任何东西
+├── manifest.webmanifest       # PWA 遗留文件（已不发布、index.html 不再引用）
+├── icons/                     # PWA 图标遗留（已不发布）
+├── supabase/migrations/       # 001~019（手动执行，见 §6）
+├── supabase/functions/        # Edge Functions（OCR 识别）
+├── cloudflare/ocr-proxy-worker.js  # 阿里云 OCR 的 Cloudflare 代理
+├── tools/                     # Python 数据工具（⚠️ factory_data_reset.py 会清空数据，慎用）
+└── .github/workflows/deploy.yml
+```
+
+**数据流约定**：页面 → `XxxAPI`（data 层）→ `DB.call()` → Supabase REST。
+`DB.call()` 统一返回 `{ ok: true, data, count }` 或 `{ ok: false, error }`，**不抛异常**。
+
+---
+
+## 6. 数据库迁移台账（务必对照 Supabase 实际情况）
+
+**所有迁移都要手动在 SQL Editor 执行**。状态说明：✅ 已确认执行 / ❓ **执行状态待确认** / ⛔ 已废弃
+
+| 迁移 | 内容 | 状态 |
+|---|---|---|
+| 001 | 初始 schema（9 张表 + 索引 + 宽松 RLS） | ✅ |
+| 002 | customers.short_name | ✅ |
+| 003 | production_records | ✅ |
+| 004 | process_route_templates | ✅ |
+| 005 | 生产记录 duration_minutes | ✅ |
+| 006 | 模板 route_signature / associated_orders | ✅ |
+| 007 | orders 状态增加 cancelled | ✅ |
+| 008 | drawings 私有桶 + Storage 策略（仅 authenticated） | ✅ |
+| 009 | **安全收口**：DROP 001/003/004 的 `USING (true)` 宽松策略，重建为 `TO authenticated` | ✅ |
+| 010 | 约束与触发器（`trg_orders_updated_at`、`trg_order_nodes_updated_at`、业务 CHECK） | ✅ |
+| 011 | production_records.node_id | ✅ |
+| 012 | production_batches / batch_relations（含 RLS） | ✅ |
+| 013 | 客户数据（TIF/SHY） | ✅ |
+| 014 | 外包/采购工序 P36–P42（type=辅助） | ✅ |
+| 015 | **order_inspections 巡检表**（独立表，不污染 orders.updated_at） | ✅ |
+| 016 | P43 切窗（制一 · 加工） | ✅ |
+| **017** | **单 active 唯一索引** `ux_order_nodes_one_active`（P0 兜底） | ❓ **需确认** |
+| 018 | P44 喷金油（已作废，仅历史记录） | ⛔ 不要执行 |
+| **019** | 删除 P44 + 把制二「打底」改名为「喷金油」 | ❓ **需确认** |
+
+### 6.1 017 的检查与执行（重要，P0 级）
+
+```sql
+-- ① 先查是否存在「双 active」异常（预期 0 行）
+SELECT order_id, count(*) AS active_cnt
+FROM order_nodes WHERE status = 'active'
+GROUP BY order_id HAVING count(*) > 1;
+
+-- ② 若无异常，创建部分唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS ux_order_nodes_one_active
+  ON order_nodes (order_id) WHERE status = 'active';
+
+NOTIFY pgrst, 'reload schema';
+```
+
+### 6.2 019 的效果（工序字典）
+
+- 制二 **P17 打底 → 喷金油**（只改 name，编码与顺序都不变）
+- P18 喷漆 / P19 消光 保持不变
+- 若曾执行 018，先删除 P44 再改名
+
+```sql
+-- 验证（预期：P17 喷金油 | P18 喷漆 | P19 消光）
+SELECT p.code, p.name, d.name AS dept
+FROM processes p LEFT JOIN departments d ON d.id = p.default_dept_id
+WHERE p.code BETWEEN 'P16' AND 'P19' ORDER BY p.code;
+```
+
+### 6.3 关键设计决策（别乱改）
+
+1. **巡检不进 orders 表**：`orders` 上有 `trg_orders_updated_at`，任何 UPDATE 都会把 `updated_at`
+   刷成 now()，会破坏首页/列表页按 `updated_at` 升序的「未推进时长」排序。故用独立表
+   `order_inspections`（`markInspected()` 只 INSERT，不写 orders）。
+2. **orders.status 是派生值**：`OrderState.derive(nodes, currentStatus)` 由节点状态推导。
+   调用时**必须传 `currentStatus`**（否则 cancelled 终态会被"复活"）。
+3. **节点序列模型**：同一订单同一时刻**只能有一个 `active` 节点**。前端三层守卫
+   （`activate` / `resume` / `undo` 共用 `guardSingleActive()`）+ DB 部分唯一索引（017）。
+4. **RLS**：所有表对 `authenticated` 全权限、`anon` 零权限；Storage `drawings` 桶同为 authenticated。
+5. **编码不重编号**：`processes.code`（P01…P43）与 `order_nodes.process_code` 历史快照绑定，
+   新工序一律**顺延分配**；绝不重排既有编码。
+
+---
+
+## 7. 功能现状（已完成）
+
+- **首页「今日待办」**：在产/暂停订单清单，按「今日未巡检优先 > `updated_at` 升序」排序；
+  汇总行（在产/已暂停/逾期/今日完成工序/今日已巡检 X/Y）；交期临近；最近生产动态。
+- **订单列表**：状态/客户/工序筛选、分页、加载更多；卡片显示客户、规格、当前工序、进度、停滞天数。
+- **新建订单**：OCR 识别客户订单图（阿里云 OCR 经 Edge Function + Cloudflare 代理）、
+  客户归档/复活、两步式建单（信息 → 选工序建路线）、图纸上传（Storage）。
+- **订单详情**：页头信息、工序时间线、节点操作（开始/完成/暂停/恢复/返工/追加工序/移除/撤销）、
+  异常登记、分批、图纸查看、**确认巡检**、取消订单、试运行清理（删除订单）。
+- **路线模板**：自动沉淀 + 按 `route_signature` 去重 + 行内改名。
+- **异常列表**、**批次详情**。
+- **弱网容错**：网络失败不再误报"订单不存在"或"密码错误"（见 §8）。
+
+---
+
+## 8. 本轮关键变更（2026-11-19）
+
+### 8.1 弱网容错（auth 相关，全部在 `js/data/client.js` / `js/app.js` / `js/components/login.js`）
+
+- `DB.isNetworkError(err)`：识别 `Failed to fetch` / `AuthRetryableFetchError` / `TimeoutError` / offline。
+- `DB.getUserState()`：返回 `{ user, error, networkError }`，**把"确实未登录"与"弱网校验失败"分开**。
+  （原 `getUser()` 丢弃 error，导致弱网误判"未登录"把人踢回登录页。）
+- `DB.onAuthStateChangeSafe()`：弱网误发的 `SIGNED_OUT` 若本地仍有会话则**忽略**；真登出才回登录页。
+- 登录页：网络类错误 → 「网络连接异常，无法连接服务器，请检查网络」；仅
+  `Invalid login credentials` 才提示「账号或密码错误」。
+- 鉴权失败且网络异常时渲染「网络连接异常」落地面 + 重新连接按钮，**不再显示登录页**。
+- **首屏不再被 cross-border 鉴权阻塞**：`app.js` 只 `await DB.awaitSession()`（读本地会话，毫秒级），
+  有会话就立刻 `startApp()` 渲染，token 校验改为**后台异步**（`getUserState().then(...)`）。
+  首屏因此少一个到东京的 RTT（实测 ttfb ≈ 0.32s，弱网可达数秒）。
+
+### 8.2 单 active 守卫 + DB 兜底（P0）
+
+- `node-actions.js` 新增唯一实现 `guardSingleActive(order, nodeId)`，`activate()` / `resume()` / `undo()`
+  三处共用。修复了可复现缺陷：**暂停 A → 激活 B → 恢复 A** 会得到两个 active 且无任何报错。
+- 7 处 `OrderState.derive(nodes)` 补传 `order.status`（现 9/9 处全部传入），`cancelled` 不再被复活。
+- 迁移 017 提供 DB 级部分唯一索引（见 §6.1）。
+- 行为回放测试 20/20 通过（含 P0 三步复现、正常推进不回归）。
+
+### 8.3 死代码清理（净减 322 行）
+
+- 删除 0 引用函数：`getProductionOverview`(7 查询聚合) / `getStalled` / `getProcessGrouped` /
+  `saveRouteTemplate`；`js/utils/dom.js` 只保留 `escapeHtml`（删掉 create/$/$$/render/show/hide）。
+- `OrdersAPI.getById` 的 select **去掉 `route_snapshot`**（前端只写不读的大 JSONB）。
+- 验证方式：node --check + 35/35 模块装载 + 全仓 `XxxAPI.foo(` 悬空引用扫描（0 处）+ 三页面 render 冒烟。
+
+### 8.4 工序字典
+
+- 需求：「喷漆」后的细化工序，名为「喷金油」「消光」，型号/参数写进订单备注。
+- 事实核对后：`P43` 已被 016「切窗」占用（`processes.code` 是 UNIQUE，编码只顺延）；
+  制二**已存在 P19 消光**；故最终方案 = **把 P17 打底改名为喷金油**（迁移 019），
+  **不新增编码、不重排顺序**。
+- 前端：新建订单「备注」框下方提示 `注：若含喷金油/消光，请在备注写明具体型号/要求。`
+
+---
+
+## 9. 开发规范与踩坑记录（血泪教训）
+
+### 9.1 改「结构相似」的领域函数后必须跑行为测试
+
+`node-actions.js` 里 `rework()` 与 `append()` 的插入片段几乎相同（只有 `process_id` 取值不同）。
+做文本锚点替换时曾把 `initialStatus` 的声明落在 `rework`、使用落在 `append`，
+**`node --check` 完全看不出**（语法合法），运行时才 `ReferenceError`。
+
+规范：
+
+1. **锚点唯一性**：替换前统计 old 片段出现次数，**必须恰好 1 次**；锚点要含能区分的行。
+2. **行为验证**：用 mock 依赖跑真实函数（mock 必须返回新对象、不改入参内存），断言改动落在正确分支。
+3. **导出闭环**：页面 `onclick="XxxPage.onFoo()"` 与 IIFE 末尾 `return {...}` 的键比对，**差集必须为空**
+   （曾漏 `onActivate` 导出 → 按钮"点不动"、无提示）。
+4. **删代码前先 grep 证明 0 引用**（含 `index.html`）；删除后跑"模块装载 + 跨模块引用扫描"。
+
+### 9.2 Windows / PowerShell 踩坑（这台机器上反复出现过）
+
+- 仓库内多数文件是 **CRLF**，个别是 LF。**不要整文件归一化**；
+  脚本里做多行锚点拼接必须按文件实际 EOL（`src.includes('\r\n') ? '\r\n' : '\n'`），
+  否则锚点 0 命中（本次清理就这样失败过一次）。
+- **提交信息含中文必须用 `git commit -F <文件>`**（PowerShell 5.1 会把 `-m` 里的中文搞乱）。
+  写消息文件要用**无 BOM** 的 UTF-8（PowerShell `Set-Content -Encoding UTF8` 会加 BOM，
+  曾导致提交主题行首出现 ``）。推荐用 `[System.IO.File]::WriteAllText(path, text, UTF8Encoding($false))`。
+- `Invoke-WebRequest` 对 GitHub Pages 的 **HEAD 请求会误报 404**，验证线上文件请用 `GET`。
+- 用 `node --check` 检查 ESM 语法的 `.js` 会误报（仓库无 `"type":"module"`）→ 复制成 `.mjs` 再查。
+- `git push` 偶发 `Failed to connect to github.com:443` → 直接重试即可。
+
+### 9.3 其它
+
+- **不要破坏零构建架构**：不引入打包器/npm 依赖；新增静态文件必须同步 `deploy.yml` 白名单。
+- **业务数据绝不缓存**：若将来再做 PWA，SW 只能缓存同源静态资源，
+  `supabase.co` 请求必须 network-only（见 §10.2 回滚教训）。
+- **别信"改了没生效"**：Pages 有 10 分钟缓存，先强刷再看；确认线上文件是否真是新版可 `curl` 比对。
+
+---
+
+## 10. 历史变更摘要
+
+### 10.1 2026-11-18 · 国内加载优化 P0（保留）
+
+- `js/vendor/supabase.min.js`：`@supabase/supabase-js` **2.119.0** 的 ESM 单文件 bundle（251.2 KB，
+  0 外部 import；仅删掉末尾 sourceMappingURL）。`index.html` import map 指向它。
+- 收益：首屏**不再有任何第三方域请求**（原先 `esm.sh` 卡住会阻塞全部业务脚本），版本锁定不漂移。
+- 版本/来源/SHA-256/升级步骤见 `js/vendor/README.md`。
+
+### 10.2 2026-11-18 · PWA 上线后回滚（教训）
+
+- 引入 Service Worker 缓存静态资源（同源 cache-first、Supabase network-only）。
+- **上线后国内反而更卡**（SW 拦截 + 缓存写入开销 > 收益）→ 当日回滚。
+- 回滚要点（重要）：旧 SW 对**导航请求**也是 cache-first，会一直返回缓存的旧 `index.html`，
+  导致新页面（含注销脚本）永远执行不到 → **不能简单删掉 `sw.js`**，必须发布「自杀式」
+  Kill Switch（`activate` 时清空缓存 + `unregister()` 自身）。现在仓库里的 `sw.js` 就是这个用途，
+  等确认所有客户端都清理完毕后（约 1~2 周）再删除它与 `deploy.yml` 中的拷贝项。
+- 页面侧：`index.html` 已无 SW 注册，只有 `getRegistrations().unregister()` + 清空 Cache Storage。
+- 若将来重新启用 PWA：**每次发版必须 bump `sw.js` 的 `VERSION`**，否则用户永远看旧缓存。
+
+### 10.3 2026-10-29 · 巡检功能 + 性能修复
+
+- 迁移 015 `order_inspections`（独立表，理由见 §6.3）；
+  首页「今日待办」排序与巡检标记；详情页「确认巡检」。
+- OCR 客户建档：查重扩到停用客户并自动复活；订单 `specs.customer_name_raw` 兜底。
+- 修复 `list.map(renderTodoRow)` 隐式传 index 导致首页白屏；`getById` 改 `maybeSingle()` 修 406；
+  31 个脚本改 `Promise.all` 并行加载。
+
+---
+
+## 11. 待办 / 已知问题（按优先级）
+
+### 高优先（仍未做）
+
+1. **乐观锁缺失**：`updateNode` / `updateStatus` 都是 `.eq('id')` 盲写（last-write-wins）。
+   多终端并发会覆盖；与"双 active"叠加有风险（前端守卫 + 017 索引已挡住最坏情况）。
+   建议：`UPDATE ... WHERE id = ? AND updated_at = ?`，影响 0 行则提示「他人已更新，请刷新」。
+2. **首屏请求数**：44 个请求（6 CSS + 37 JS/vendor）、无 `preload`、31 个 JS 全量加载
+   （含 50 KB 的 order-detail.js）。可做：CSS 合并 1 个、`rel=preload` vendor、按路由懒加载。
+3. **仓库是公开的**：`AI_CONTEXT/`、`HANDOFF.md`、迁移 SQL、tools 全部公开（无密钥泄漏，
+   但暴露数据模型与内部规划）。建议转私有或移除 `AI_CONTEXT/`。
+
+### 中低优先
+
+4. `escapeHTML` 在 10 个页面文件里各重复定义一份（转调 `DOM.escapeHtml`）→ 可收敛。
+5. `bumpSeq()` 是 N+1（1 SELECT + N UPDATE）；`deleteOrder()` 7 个串行查询且**无事务**。
+6. `order_inspections.inspected_by` 从未写入 → 无法追溯"谁巡检"。
+7. 首页/列表页切页重复拉取（无会话内缓存）。
+8. `removeNode` 删到没有非 done 节点时可能让订单直接变 `completed`（语义待确认）。
+9. `sw.js` Kill Switch 与 `manifest.webmanifest`、`icons/` 是回滚遗留，1~2 周后可清理（见 §10.2）。
+10. `tools/factory_data_reset.py` 会**清空并重建**业务数据（⚠️ 慎用）；
+    `tools/` 与 `AI_CONTEXT/` 是本地工具/资料，**不参与部署**。
+
+---
+
+## 12. 每次发版后的验收清单（手测 5 分钟）
+
+1. **强刷**线上页面（Ctrl+Shift+R），Console 无报错。
+2. **首页** `#/`：清单、汇总行、交期临近、动态正常。
+3. **订单列表** `#/orders`：卡片/进度条/筛选正常。
+4. **订单详情**：打开一个在产订单 → 推进/暂停/恢复按钮可用；**测一次双 active 守卫**
+   （暂停当前 → 激活下一道 → 回去点"恢复"，应提示「已有进行中的工序…」）。
+5. **新建订单** `#/orders/new`：备注框下方提示文案可见；第二步能选到新工序（如「喷金油」）。
+6. 断网刷新 → 应显示「网络连接异常」而非登录页；恢复网络后重新连接可正常进入。
+
+---
+
+## 13. 快速自检命令（Windows PowerShell）
+
+```powershell
+cd C:\Users\Administrator\dialfactory
+
+# 1) 语法检查（改动过哪些文件就查哪些）
+$f='js/app.js','js/domain/node-actions.js'; foreach($p in $f){ $t="$env:TEMP\c.mjs"; Copy-Item $p $t -Force; node --check $t; Write-Host "$p exit=$LASTEXITCODE"; Remove-Item $t -Force }
+
+# 2) 死代码/悬空引用粗查（举例：确认某函数确实 0 引用）
+Select-String -Path js\**\*.js -Pattern 'getStalled' -SimpleMatch
+
+# 3) 线上文件是否为最新版（GET，不要用 HEAD）
+$ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+(Invoke-WebRequest "https://1051516344-web.github.io/dialfactory/js/app.js?cb=$ts").
+
+# 4) 仓库状态/最近提交
+git status --short; git log --oneline -5
+```
+
+---
+
+## 14. 接手后建议的第一步
+
+1. `git pull` → 读 §6 台账，**确认 017 与 019 是否已在 Supabase 执行**（这两条影响数据正确性）。
+2. 本地 `npx serve .` 起服务，登录跑一遍 §12 清单，确认基线健康。
+3. 再挑 §11 里的事项继续（建议先做「乐观锁」，它是多人协同的最后一块短板）。
