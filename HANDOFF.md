@@ -130,7 +130,8 @@ dialfactory/
 
 ## 6. 数据库迁移台账（务必对照 Supabase 实际情况）
 
-**所有迁移都要手动在 SQL Editor 执行**。状态说明：✅ 已确认执行 / ❓ **执行状态待确认** / ⛔ 已废弃
+**所有迁移都要手动在 SQL Editor 执行**。文件位置统一在 `supabase/migrations/`。
+状态说明：✅ 已确认执行 / ❓ **执行状态待确认** / ⛔ 已废弃
 
 | 迁移 | 内容 | 状态 |
 |---|---|---|
@@ -150,9 +151,9 @@ dialfactory/
 | 014 | 外包/采购工序 P36–P42（type=辅助） | ✅ |
 | 015 | **order_inspections 巡检表**（独立表，不污染 orders.updated_at） | ✅ |
 | 016 | P43 切窗（制一 · 加工） | ✅ |
-| **017** | **单 active 唯一索引** `ux_order_nodes_one_active`（P0 兜底） | ❓ **需确认** |
-| 018 | P44 喷金油（已作废，仅历史记录） | ⛔ 不要执行 |
-| **019** | 删除 P44 + 把制二「打底」改名为「喷金油」 | ❓ **需确认** |
+| **017** | `017_single_active_node_guard.sql`：**单 active 唯一索引** `ux_order_nodes_one_active`（P0 兜底） | ❓ **需确认** |
+| 018 | `018_add_painting_processes.sql`：P44 喷金油（已作废，仅历史记录） | ⛔ 不要执行 |
+| **019** | `019_rename_dipping_to_gold_oil.sql`：删除 P44 + 把制二「打底」改名为「喷金油」 | ❓ **需确认** |
 
 ### 6.1 017 的检查与执行（重要，P0 级）
 
