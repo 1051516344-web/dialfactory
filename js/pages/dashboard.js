@@ -27,7 +27,7 @@ const DashboardPage = (() => {
     `;
 
     // 主数据：在产 + 已暂停（list({}) 默认已排除 completed / cancelled）
-    // 另外两个是各自独立的轻查询；不再使用 getProductionOverview 的 currentProduction 旧口径
+    // 另外两个是各自独立的轻查询，保持轻量口径（旧的聚合查询已下线，勿再引入 N 次查询）
     const [ordersResult, recentResult, todayResult, inspResult] = await Promise.all([
       OrdersAPI.list({ pageSize: 100 }),
       ProductionRecordsAPI.getRecentActivity(20),

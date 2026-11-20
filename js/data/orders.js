@@ -56,10 +56,12 @@ const OrdersAPI = (() => {
   async function getById(orderId) {
     const db = DB.get();
 
+    // 不取 route_snapshot：前端全仓只写不读，且它是较大的 JSONB —— 白白增加跨境传输量。
+    // （若将来详情页需要展示原始路线快照，再按需单独查询，勿加回列表列。）
     const [orderResult, nodesResult] = await Promise.all([
       DB.call(
         db.from('orders')
-          .select('id,order_no,customer_id,order_qty,due_date,base_texture,plate_color,specs,route_snapshot,status,note,created_at,updated_at, customer:customers(name, short_name)')
+          .select('id,order_no,customer_id,order_qty,due_date,base_texture,plate_color,specs,status,note,created_at,updated_at, customer:customers(name, short_name)')
           .eq('id', orderId)
           // maybeSingle：id 不存在时返回 data=null，而不是 406（PGRST116）
           .maybeSingle()

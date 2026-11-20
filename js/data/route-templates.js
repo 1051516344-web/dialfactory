@@ -36,74 +36,6 @@ const RouteTemplatesAPI = (() => {
   }
 
   /**
-   * Save a route as a template.
-   * If a template with the same route_signature already exists,
-   * increment used_count, update last_used_at, and append the order.
-   * Only creates a new template when the signature is truly new.
-   *
-   * @param {Array} processList - [{ order, process, department }, ...]
-   * @param {string} orderId   - UUID of the order being saved
-   * @returns { ok, data } - data is the template record (new or updated)
-   */
-  async function saveRouteTemplate(processList, orderId) {
-    if (!processList || processList.length === 0) {
-      return { ok: false, error: 'Empty process list' };
-    }
-
-    const routeSignature = buildSignature(processList);
-
-    // 1. Query by route_signature directly (database-level dedup)
-    const { ok, data: existing } = await DB.call(
-      DB.get().from('process_route_templates')
-        .select('id, used_count, associated_orders')
-        .eq('route_signature', routeSignature)
-        .maybeSingle()
-    );
-
-    // 2. Match found — increment + append order
-    if (ok && existing) {
-      const prevOrders = existing.associated_orders || [];
-      const newOrders = orderId && !prevOrders.includes(orderId)
-        ? [...prevOrders, orderId]
-        : prevOrders;
-
-      return DB.call(
-        DB.get().from('process_route_templates')
-          .update({
-            used_count: existing.used_count + 1,
-            last_used_at: new Date().toISOString(),
-            associated_orders: newOrders
-          })
-          .eq('id', existing.id)
-          .select().single()
-      );
-    }
-
-    // 3. No match — create new template
-    // Get current count for sequence number
-    const { count } = await DB.call(
-      DB.get().from('process_route_templates')
-        .select('*', { count: 'exact', head: true })
-    );
-    const seq = (count || 0) + 1;
-    const name = generateName(routeSignature, seq);
-
-    return DB.call(
-      DB.get().from('process_route_templates')
-        .insert({
-          template_name: name,
-          route_signature: routeSignature,
-          process_list: processList,
-          process_count: processList.length,
-          used_count: 1,
-          associated_orders: orderId ? [orderId] : [],
-          last_used_at: new Date().toISOString()
-        })
-        .select().single()
-    );
-  }
-
-  /**
    * List all templates, newest first.
    */
   async function list() {
@@ -237,5 +169,5 @@ const RouteTemplatesAPI = (() => {
     );
   }
 
-  return { saveRouteTemplate, list, getById, updateName, buildSignature, createTemplate, updateProcesses, deleteTemplate };
+  return { list, getById, updateName, buildSignature, createTemplate, updateProcesses, deleteTemplate };
 })();
