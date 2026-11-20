@@ -71,8 +71,9 @@ cd dialfactory
    ```bash
    npx serve .            # 或 python -m http.server 8080
    ```
-   打开 `http://localhost:3000/`（端口按提示），用 Supabase 账号登录。
-   > 仓库根的 `serve.js` 是本地小工具，**已在 .gitignore 中**（不会提交、不会上线）。
+   打开提示的地址（`npx serve` 默认 3000，`python -m http.server` 默认 8000），用 Supabase 账号登录。
+   > **没有 Node 的机器**（例如 macOS）直接用 `python3 -m http.server 8080 --bind 127.0.0.1`，效果等价。
+   > 原 Windows 机器上的 `serve.js` 是本地小工具，已在 `.gitignore` 中，**未入库**——克隆后没有这个文件属正常。
 
 2. **确认凭证**：`js/config.js` 已含 URL + anon key，克隆后即可用。
 
