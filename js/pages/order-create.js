@@ -132,7 +132,7 @@ const OrderCreatePage = (() => {
           <label class="form-label">备注</label>
           <textarea id="form-note" class="form-textarea" rows="2" placeholder="选填">${escapeHTML(formData.note || '')}</textarea>
           <div style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">
-            注：若含喷金油或消光，请在备注写明具体型号/要求。
+            注：若含喷金油/消光，请在备注写明具体型号/要求。
           </div>
         </div>
 
