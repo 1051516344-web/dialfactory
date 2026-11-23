@@ -215,7 +215,8 @@ const OrderDetailPage = (() => {
       actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onActivate('${node.id}')">激活</button>`;
     }
     if (actions.includes('remove')) {
-      actionsHtml += `<button class="btn btn-danger btn-sm" onclick="OrderDetailPage.onRemove('${node.id}')">移除</button>`;
+      const removeLabel = node.status === 'done' ? '删除工序' : '移除';
+      actionsHtml += `<button class="btn btn-danger btn-sm" onclick="OrderDetailPage.onRemove('${node.id}')">${removeLabel}</button>`;
     }
     if (actions.includes('rework')) {
       actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onRework('${node.id}')">返工</button>`;
@@ -442,14 +443,20 @@ const OrderDetailPage = (() => {
   function onRemove(nodeId) {
     const node = getNode(nodeId);
     if (!node) return;
+
+    const isDone = node.status === 'done';
+    const warn = isDone
+      ? '该工序已完成，删除后它的生产记录与生产轨迹会一并删除（下游工序不受影响）。'
+      : '仅可移除未开始的工序，移除后不可恢复。';
+
     ConfirmDialog.show({
-      title: '确认移除工序',
+      title: isDone ? '删除已完成工序' : '确认移除工序',
       content: `
-        <p>确认移除工序 <strong>${escapeHTML(node.process_name || '—')}</strong>？</p>
-        <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">仅可移除未开始的工序，移除后不可恢复。</p>
+        <p>确认${isDone ? '删除' : '移除'}工序 <strong>${escapeHTML(node.process_name || '—')}</strong>？</p>
+        <p style="color:var(--color-danger);font-size:var(--font-size-sm);">${warn}</p>
         ${node.note ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">备注：${escapeHTML(node.note)}</p>` : ''}
       `,
-      confirmLabel: '确认移除',
+      confirmLabel: isDone ? '确认删除' : '确认移除',
       dangerous: true,
       onConfirm: async () => {
         const result = await NodeActions.removeNode(currentOrder, node);

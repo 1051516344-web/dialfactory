@@ -11,7 +11,7 @@ const NodeEventsAPI = (() => {
   async function listByOrderId(orderId) {
     return DB.call(
       DB.get().from('node_events')
-        .select('id, node_id, process_name, event, from_status, to_status, qty_in, good_qty, bad_qty, note, occurred_at')
+        .select('*')
         .eq('order_id', orderId)
         .order('occurred_at', { ascending: true })
     );

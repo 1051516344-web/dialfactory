@@ -40,7 +40,8 @@ const NodeState = (() => {
     } else if (s === 'paused') {
       actions.push('resume', 'append', 'record_exception');
     } else if (s === 'done') {
-      actions.push('rework', 'append', 'record_exception');
+      // 已完成工序也允许移除：误完成/误加的工序需要能清掉（会连带删除它的生产记录与轨迹）
+      actions.push('rework', 'append', 'record_exception', 'remove');
     } else if (s === 'waiting') {
       // FIX(R46499): 手动激活。跨部门未自动激活 / 数据异常时，
       // waiting 节点原先没有任何可用操作，会彻底卡死。

@@ -544,9 +544,9 @@ const NodeActions = (() => {
   // production_records.node_id 为 ON DELETE SET NULL，历史记录保留。
   // ==========================================================
   async function removeNode(order, node) {
-    // 守卫1：只能移除尚未开始的工序，防止误删在产或已完工的记录
-    if (node.status !== 'waiting') {
-      return { ok: false, error: '只能移除未开始的工序', phase: 'forbidden' };
+    // 守卫1：未开始 / 已完成 可移除；进行中、暂停中不可（避免把在产工序删掉）
+    if (node.status !== 'waiting' && node.status !== 'done') {
+      return { ok: false, error: '进行中或暂停中的工序不可移除，请先处理状态', phase: 'forbidden' };
     }
     // 守卫2：返工节点不可单独移除（与 undo 的 F5 一致）
     if (node.rework_pass > 0) {
