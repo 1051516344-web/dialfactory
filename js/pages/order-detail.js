@@ -11,6 +11,7 @@ const OrderDetailPage = (() => {
   let currentNodeEvents = [];
   let currentBatches = [];
   let currentBatchProgress = [];
+  let selectedBatchId = null;   // 选中的批次（null = 全部）
   let currentBatchRelations = [];
   let currentLastInspection = null;   // 最近一次巡检记录 { inspected_at } 或 null
 
@@ -95,6 +96,8 @@ const OrderDetailPage = (() => {
 
     const specText = [order.base_texture, order.plate_color, order.specs?.base_plate_color].filter(Boolean).join('+') || '—';
     const custOrderNo = order.specs?.customer_order_no || '';
+    const hasBatches = (currentBatches || []).some(b => b.status !== 'cancelled');
+    const selectedBatch = selectedBatchId ? (currentBatches || []).find(b => b.id === selectedBatchId) : null;
 
     container.innerHTML = `
       <div class="page-header">
@@ -126,13 +129,14 @@ const OrderDetailPage = (() => {
       </div>
 
       <div id="order-flow-section">
+        ${renderBatchSelector()}
         <div class="section-title" style="margin-top:var(--space-lg);display:flex;align-items:center;gap:var(--space-sm);">
-          <span>生产流程</span>
-          ${nodes.length > 0 ? `<button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="OrderDetailPage.onSaveAsTemplate()">保存为模板路线</button>` : ''}
+          <span>${selectedBatch ? '生产流程 · ' + escapeHTML(selectedBatch.color || selectedBatch.batch_no) : '生产流程'}</span>
+          ${!selectedBatch && nodes.length > 0 ? `<button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="OrderDetailPage.onSaveAsTemplate()">保存为模板路线</button>` : ''}
         </div>
         ${nodes.length === 0
           ? EmptyState.render({ icon: '📋', title: '暂无工序节点', desc: '该订单尚未生成工序执行记录。' })
-          : renderFlow(nodes, excByNode)
+          : (selectedBatch ? renderBatchFlow(selectedBatch) : renderFlow(nodes, excByNode, hasBatches))
         }
       </div>
 
@@ -157,12 +161,12 @@ const OrderDetailPage = (() => {
   // ==========================================================
   // Flow Rendering
   // ==========================================================
-  function renderFlow(nodes, excByNode) {
+  function renderFlow(nodes, excByNode, readOnly) {
     const sorted = [...nodes].sort((a, b) => a.seq - b.seq);
     let html = '<div class="flow-container">';
 
     sorted.forEach((node, i) => {
-      html += renderNodeCard(node, excByNode[node.id] || []);
+      html += renderNodeCard(node, excByNode[node.id] || [], readOnly);
       if (i < sorted.length - 1) {
         html += '<div class="flow-arrow">↓</div>';
       }
@@ -172,7 +176,7 @@ const OrderDetailPage = (() => {
     return html;
   }
 
-  function renderNodeCard(node, exceptions) {
+  function renderNodeCard(node, exceptions, readOnly) {
     const iconMap = { waiting: '○', active: '▶', done: '✓', paused: '⏸' };
     const icon = iconMap[node.status] || '?';
     const reworkBadge = node.rework_pass > 0
@@ -201,17 +205,17 @@ const OrderDetailPage = (() => {
     let actionsHtml = '';
     // 唯一的完成入口：生产记录的结算由 NodeActions.advance() 内部自动完成，
     // 不再提供「开始生产 / 生产完成」两个按钮（两条并行路径正是数据错位的根源）。
-    if (actions.includes('advance')) {
+    if (actions.includes('advance') && !readOnly) {
       const label = Validation.requiresQtyOut(node) ? '完成(需填产出)' : '完成';
       actionsHtml += `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onAdvance('${node.id}')">${label}</button>`;
     }
-    if (actions.includes('pause')) {
+    if (actions.includes('pause') && !readOnly) {
       actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onPause('${node.id}')">暂停</button>`;
     }
-    if (actions.includes('resume')) {
+    if (actions.includes('resume') && !readOnly) {
       actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onResume('${node.id}')">恢复</button>`;
     }
-    if (actions.includes('activate')) {
+    if (actions.includes('activate') && !readOnly) {
       actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onActivate('${node.id}')">激活</button>`;
     }
     if (actions.includes('remove')) {
@@ -236,7 +240,7 @@ const OrderDetailPage = (() => {
                     && currentOrder.status !== 'completed'
                     && currentOrder.status !== 'cancelled'
                     && (node.rework_pass || 0) === 0;
-    if (canUndo) {
+    if (canUndo && !readOnly) {
       actionsHtml += `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onUndo('${node.id}')">撤销</button>`;
     }
 
@@ -263,6 +267,142 @@ const OrderDetailPage = (() => {
         ${actionsHtml ? `<div class="node-actions">${actionsHtml}</div>` : ''}
       </div>
     `;
+  }
+
+  // ==========================================================
+  // Batch Mode（批次独立流转）
+  // ==========================================================
+  function renderBatchSelector() {
+    const active = (currentBatches || []).filter(b => b.status !== 'cancelled');
+    if (active.length === 0) return '';
+    const allCls = !selectedBatchId ? 'btn-primary' : 'btn-ghost';
+    const tabs = active.map(function (b) {
+      const cls = b.id === selectedBatchId ? 'btn-primary' : 'btn-ghost';
+      return `<button class="btn btn-sm ${cls}" onclick="OrderDetailPage.onSelectBatch('${b.id}')">${escapeHTML(b.color || b.batch_no)} ${Format.number(b.quantity)}</button>`;
+    }).join('');
+    return `
+      <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-md);">
+        <button class="btn btn-sm ${allCls}" onclick="OrderDetailPage.onSelectBatch('')">全部</button>
+        ${tabs}
+      </div>`;
+  }
+
+  function renderBatchFlow(batch) {
+    const events = (currentNodeEvents || []).filter(function (e) {
+      return !e.batch_id || e.batch_id === batch.id;
+    });
+    const flow = (typeof BatchFlow !== 'undefined')
+      ? BatchFlow.deriveRoute(events, currentNodeList, batch.start_node_id)
+      : null;
+
+    if (!flow || flow.rows.length === 0) {
+      return EmptyState.render({ icon: '📋', title: '该订单还没有工序路线', desc: '回到「全部」在订单上建立工序，再回来推进批次。' });
+    }
+
+    let lastDoneSeq = -1;
+    flow.rows.forEach(function (r) { if (r.status === 'done' && r.seq > lastDoneSeq) lastDoneSeq = r.seq; });
+
+    const STATUS = {
+      done:    { icon: '✓', text: '已完成', cls: 'done' },
+      active:  { icon: '▶', text: '进行中', cls: 'active' },
+      paused:  { icon: '⏸', text: '已暂停', cls: 'pending' },
+      waiting: { icon: '○', text: '等待中', cls: 'pending' }
+    };
+
+    const rows = flow.rows.map(function (r) {
+      const isCurrent = flow.current && flow.current.nodeId === r.nodeId;
+      const st = STATUS[r.status] || STATUS.waiting;
+
+      let actions = '';
+      if (isCurrent && r.status === 'active') {
+        actions = `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onBatchAction('advance','${r.nodeId}')">完成</button>
+                   <button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onBatchAction('pause','${r.nodeId}')">暂停</button>`;
+      } else if (isCurrent && r.status === 'paused') {
+        actions = `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onBatchAction('resume','${r.nodeId}')">恢复</button>`;
+      } else if (isCurrent && r.status === 'waiting') {
+        actions = `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onBatchAction('activate','${r.nodeId}')">开始</button>`;
+      } else if (r.status === 'done' && r.seq === lastDoneSeq) {
+        actions = `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onBatchAction('undo','${r.nodeId}')">撤销</button>`;
+      }
+
+      const bits = [];
+      if (r.completedAt) bits.push('完成 ' + formatDateTime(new Date(r.completedAt)));
+      if (r.good != null) bits.push('良品 ' + Format.number(r.good));
+      if (r.bad != null) bits.push('次品 ' + Format.number(r.bad));
+
+      return `
+        <div class="node-card status-${r.status}" style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);padding:var(--space-sm) var(--space-md);">
+          <div>
+            <div style="font-weight:600;">${st.icon} ${escapeHTML(r.processName)}
+              <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">${st.text}</span>
+            </div>
+            ${bits.length ? `<div style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">${bits.join(' · ')}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:var(--space-xs);flex-shrink:0;">${actions}</div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:var(--space-sm);">${rows}</div>
+      <div style="font-size:var(--font-size-xs);color:var(--text-muted);margin-top:var(--space-sm);">完成 ${flow.doneCount}/${flow.total} 道 · 这里的操作只影响「${escapeHTML(batch.color || batch.batch_no)}」这个批次</div>`;
+  }
+
+  function onSelectBatch(batchId) {
+    selectedBatchId = batchId || null;
+    renderFull(document.getElementById('page-container'));
+  }
+
+  async function refreshFull() {
+    await render(currentOrder.id);
+  }
+
+  function handleBatchActionResult(result) {
+    if (!result.ok) { Toast.error(result.error || '操作失败'); return; }
+    Toast.success('已更新');
+    refreshFull();
+  }
+
+  async function onBatchAction(kind, nodeId) {
+    const batch = (currentBatches || []).find(function (b) { return b.id === selectedBatchId; });
+    const node = (currentNodeList || []).find(function (n) { return n.id === nodeId; });
+    if (!batch || !node) return;
+
+    if (kind === 'advance') {
+      ConfirmDialog.show({
+        title: '完成工序',
+        content: `
+          <p>确认完成 <strong>${escapeHTML(node.process_name)}</strong>（批次 ${escapeHTML(batch.color || batch.batch_no)}）？</p>
+          <div class="form-group"><label class="form-label">投入数量 (选填)</label><input type="number" name="qty_in" class="form-input" min="0" placeholder="进入本工序的数量"></div>
+          <div class="form-group"><label class="form-label">良品数 (选填)</label><input type="number" name="good_qty" class="form-input" min="0"></div>
+          <div class="form-group"><label class="form-label">次品数 (选填)</label><input type="number" name="bad_qty" class="form-input" min="0"></div>
+        `,
+        confirmLabel: '确认完成',
+        onConfirm: async (data) => {
+          handleBatchActionResult(await BatchActions.advance(currentOrder, batch, node, {
+            qtyIn: parseQty(data.qty_in),
+            goodQty: parseQty(data.good_qty),
+            badQty: parseQty(data.bad_qty)
+          }));
+        }
+      });
+      return;
+    }
+
+    if (kind === 'pause') {
+      ConfirmDialog.show({
+        title: '暂停原因',
+        content: `<div class="form-group"><select name="reason" class="form-select">${CONFIG.PAUSE_REASONS.map(r => `<option value="${r.value}">${r.label}</option>`).join('')}</select></div>`,
+        confirmLabel: '确认暂停',
+        onConfirm: async (data) => {
+          handleBatchActionResult(await BatchActions.pause(currentOrder, batch, node, data.reason));
+        }
+      });
+      return;
+    }
+
+    if (kind === 'resume') handleBatchActionResult(await BatchActions.resume(currentOrder, batch, node));
+    else if (kind === 'activate') handleBatchActionResult(await BatchActions.activate(currentOrder, batch, node));
+    else if (kind === 'undo') handleBatchActionResult(await BatchActions.undo(currentOrder, batch, node));
   }
 
   // ==========================================================
@@ -878,8 +1018,11 @@ const OrderDetailPage = (() => {
    * 与上方「生产流程」的区别：那边是计划与操作，这边是实际发生了什么、用了多久、产了多少。
    */
   function renderProductionTimeline(events) {
+    const filtered = selectedBatchId
+      ? (events || []).filter(function (e) { return !e.batch_id || e.batch_id === selectedBatchId; })
+      : events;
     const rows = (typeof ProductionTimeline !== 'undefined')
-      ? ProductionTimeline.summarize(events)
+      ? ProductionTimeline.summarize(filtered)
       : [];
 
     if (rows.length === 0) {
@@ -1262,5 +1405,5 @@ const OrderDetailPage = (() => {
     });
   }
 
-  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, showCreateBatchDialog, onSaveAsTemplate, onMarkInspected };
+  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, showCreateBatchDialog, onSaveAsTemplate, onMarkInspected, onSelectBatch, onBatchAction };
 })();
