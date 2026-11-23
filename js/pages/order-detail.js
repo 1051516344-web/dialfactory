@@ -341,6 +341,10 @@ const OrderDetailPage = (() => {
           <input type="number" name="qtyOut" class="form-input" placeholder="合格品数量" min="1" autofocus>
         </div>` : ''}
         <div class="form-group">
+          <label class="form-label">投入数量 (选填)</label>
+          <input type="number" name="qty_in" class="form-input" placeholder="进入本工序的数量" min="0">
+        </div>
+        <div class="form-group">
           <label class="form-label">良品数 (选填)</label>
           <input type="number" name="good_qty" class="form-input" placeholder="件数" min="0">
         </div>
@@ -357,6 +361,7 @@ const OrderDetailPage = (() => {
       onConfirm: async (data) => {
         let goodQty = parseQty(data.good_qty);
         let badQty = parseQty(data.bad_qty);
+        const qtyIn = parseQty(data.qty_in);
         let qtyOut = needsQty ? data.qtyOut : undefined;
         let perBatch = null;
 
@@ -382,6 +387,7 @@ const OrderDetailPage = (() => {
         }
 
         const result = await NodeActions.advance(currentOrder, node, {
+          qtyIn: qtyIn,
           qtyOut: qtyOut,
           goodQty: goodQty,
           badQty: badQty,
@@ -859,59 +865,68 @@ const OrderDetailPage = (() => {
    * 开始 / 完成 / 暂停 / 恢复 / 撤销 / 追加 / 返工 都会留下一条；
    * 工序被移除时其事件随外键 CASCADE 删除，轨迹自动同步消失。
    */
+  /**
+   * 生产轨迹 = 按工序聚合的生产记录（数据源是 node_events 事件流）。
+   * 显示：开始 / 完成 / 耗时（扣除暂停）/ 投入 / 良品 / 次品 / 损耗。
+   * 与上方「生产流程」的区别：那边是计划与操作，这边是实际发生了什么、用了多久、产了多少。
+   */
   function renderProductionTimeline(events) {
-    const list = (events || []).slice().sort(function (a, b) {
-      return new Date(a.occurred_at) - new Date(b.occurred_at);
-    });
+    const rows = (typeof ProductionTimeline !== 'undefined')
+      ? ProductionTimeline.summarize(events)
+      : [];
 
-    if (list.length === 0) {
+    if (rows.length === 0) {
       return `
         <div class="card">
           <div class="section-title">生产轨迹</div>
           ${EmptyState.render({
             icon: '📋',
-            title: '还没有工序动作',
-            desc: '开始或完成工序后，这里会按时间记录每一步。'
+            title: '还没有实际生产记录',
+            desc: '工序开始或完成后，这里会记录开始/完成时间、耗时与产量。'
           })}
         </div>
       `;
     }
 
-    const META = {
-      activate: { icon: '▶', text: '开始生产', cls: 'active' },
-      done:     { icon: '✓', text: '完成',     cls: 'done' },
-      pause:    { icon: '⏸', text: '暂停',     cls: 'pending' },
-      resume:   { icon: '▶', text: '恢复',     cls: 'active' },
-      undo:     { icon: '↩', text: '撤销',     cls: 'pending' },
-      append:   { icon: '＋', text: '追加工序', cls: 'pending' },
-      rework:   { icon: '↻', text: '返工',     cls: 'pending' }
+    const STATUS = {
+      done:    { icon: '✓', cls: 'done',    text: '已完成' },
+      active:  { icon: '▶', cls: 'active',  text: '进行中' },
+      paused:  { icon: '⏸', cls: 'pending', text: '已暂停' },
+      pending: { icon: '＋', cls: 'pending', text: '待开始' }
     };
 
-    const entries = list.map(function (e) {
-      const meta = META[e.event] || { icon: '·', text: e.event, cls: 'pending' };
+    const entries = rows.map(function (r) {
+      const st = STATUS[r.status] || STATUS.pending;
 
-      const lines = [];
-      lines.push(`<div class="timeline-time">${formatDateTime(e.occurred_at)}</div>`);
+      const timeBits = [];
+      timeBits.push(r.start ? ('开始 ' + formatDateTime(new Date(r.start))) : '开始未记录');
+      if (r.status === 'done' && r.end) timeBits.push('完成 ' + formatDateTime(new Date(r.end)));
 
-      if (e.good_qty != null || e.bad_qty != null) {
-        const q = [];
-        if (e.good_qty != null) q.push('良品 ' + Format.number(e.good_qty));
-        if (e.bad_qty != null) q.push('次品 ' + Format.number(e.bad_qty));
-        lines.push(`<div class="timeline-time">${q.join(' · ')}</div>`);
+      const elapsed = r.activeMs + r.runningMs;
+      if (elapsed > 0) {
+        timeBits.push((r.status === 'done' ? '耗时 ' : '已进行 ') + formatDuration(new Date(0), new Date(elapsed)));
       }
-      if (e.note) {
-        lines.push(`<div class="timeline-time" style="color:var(--text-muted);">${escapeHTML(e.note)}</div>`);
+      if (r.pauseCount > 0) timeBits.push('暂停 ' + r.pauseCount + ' 次');
+
+      const qtyBits = [];
+      if (r.qtyIn != null) qtyBits.push('投入 ' + Format.number(r.qtyIn));
+      if (r.good != null) qtyBits.push('良品 ' + Format.number(r.good));
+      if (r.bad != null) qtyBits.push('次品 ' + Format.number(r.bad));
+      if (r.qtyIn != null && (r.good != null || r.bad != null)) {
+        const loss = r.qtyIn - (r.good || 0) - (r.bad || 0);
+        if (loss >= 0) qtyBits.push('损耗 ' + Format.number(loss));
       }
 
       return `
         <div class="timeline-entry">
-          <div class="timeline-dot ${meta.cls}">${meta.icon}</div>
+          <div class="timeline-dot ${st.cls}">${st.icon}</div>
           <div class="timeline-content">
             <div class="timeline-header">
-              <span class="timeline-process">${escapeHTML(e.process_name || '—')}</span>
-              <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${meta.text}</span>
+              <span class="timeline-process">${escapeHTML(r.processName || '—')}</span>
+              <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${st.text}</span>
             </div>
-            ${lines.join('')}
+            <div class="timeline-time">${timeBits.join(' · ')}</div>
+            ${qtyBits.length ? `<div class="timeline-time">${qtyBits.join(' · ')}</div>` : ''}
           </div>
         </div>
       `;
@@ -919,8 +934,8 @@ const OrderDetailPage = (() => {
 
     return `
       <div class="card">
-        <div class="section-title">生产轨迹
-          <span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（按工序动作实时记录 · 共 ${list.length} 条）</span>
+        <div class="section-title">生产轨迹（实际）
+          <span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（按工序聚合 · ${rows.length} 道）</span>
         </div>
         <div class="timeline">
           ${entries}
@@ -929,7 +944,6 @@ const OrderDetailPage = (() => {
     `;
   }
 
-  /** 动作完成后刷新轨迹（事件流是权威数据，重新拉取） */
   async function refreshTimeline() {
     if (typeof NodeEventsAPI === 'undefined' || !currentOrder) return;
     const r = await NodeEventsAPI.listByOrderId(currentOrder.id);

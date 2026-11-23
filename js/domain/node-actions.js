@@ -47,6 +47,7 @@ const NodeActions = (() => {
         event: event,
         from_status: opts.from || null,
         to_status: opts.to || null,
+        qty_in: opts.qtyIn != null ? Number(opts.qtyIn) : null,
         good_qty: opts.goodQty != null ? Number(opts.goodQty) : null,
         bad_qty: opts.badQty != null ? Number(opts.badQty) : null,
         note: opts.note || null
@@ -80,7 +81,7 @@ const NodeActions = (() => {
 
     await logEvent(order.id, node, 'done', {
       from: node.status, to: 'done',
-      goodQty: options.goodQty, badQty: options.badQty
+      qtyIn: options.qtyIn, goodQty: options.goodQty, badQty: options.badQty
     });
 
     // 闭环：节点被置为 done 时，必须同步收口它的生产记录。
