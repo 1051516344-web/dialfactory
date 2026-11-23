@@ -76,8 +76,9 @@ const BatchDetailPage = (() => {
         : `<div class="card" style="padding:0;overflow:hidden;">${renderChildRows()}</div>`
       }
 
-      <div style="margin-top:var(--space-lg);">
+      <div style="margin-top:var(--space-lg);display:flex;gap:var(--space-sm);flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="BatchDetailPage.showSplitModal()">拆分批次</button>
+        <button class="btn btn-danger" onclick="BatchDetailPage.onDeleteBatch()">删除批次</button>
       </div>
     `;
   }
@@ -209,9 +210,50 @@ const BatchDetailPage = (() => {
     });
   }
 
+  /**
+   * 删除当前批次（误建批次的撤销入口）。
+   * 已拆分的父批次会被后端拒绝，提示先删子批次。
+   */
+  async function onDeleteBatch() {
+    const b = currentBatch;
+    if (!b) return;
+
+    const cnt = await DB.call(
+      DB.get().from('batch_progress')
+        .select('id', { count: 'exact', head: true })
+        .eq('batch_id', b.id)
+    );
+    const progressCount = (cnt.ok && cnt.count) || 0;
+
+    ConfirmDialog.show({
+      title: '删除批次',
+      dangerous: true,
+      confirmLabel: '确认删除',
+      content: `
+        <p>确认删除批次 <strong>#${escapeHTML(b.batch_no)}</strong>？</p>
+        <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">
+          ${escapeHTML(b.color || '—')} · ${Format.number(b.quantity)}片
+        </p>
+        ${progressCount > 0
+          ? `<p style="color:var(--color-danger);font-size:var(--font-size-sm);">该批次已有 ${progressCount} 条工序进度记录，将一并删除。</p>`
+          : ''}
+        <p style="color:var(--color-danger);font-size:var(--font-size-sm);">⚠ 删除后不可恢复。</p>
+      `,
+      onConfirm: async () => {
+        const res = await BatchesAPI.deleteBatch(b.id);
+        if (!res.ok) {
+          Toast.error(res.error || '删除失败');
+          return;
+        }
+        Toast.success('批次已删除');
+        Router.navigate('/orders/' + b.order_id);
+      }
+    });
+  }
+
   function escapeHTML(str) {
     return DOM.escapeHtml(str);
   }
 
-  return { render, showSplitModal };
+  return { render, showSplitModal, onDeleteBatch };
 })();

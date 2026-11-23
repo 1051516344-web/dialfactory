@@ -115,5 +115,68 @@ const BatchesAPI = (() => {
     );
   }
 
-  return { createRootBatch, listByOrderId, getById, splitBatch };
+  /**
+   * 删除一个「叶子」批次（误建批次的撤销入口）。
+   * 规则：
+   *   · 已拆分的父批次不可直接删除 —— 先删子批次，避免留下孤儿批次
+   *   · 子批次可删：连带删除它的 split 关系与 batch_progress（外键 CASCADE）
+   *   · 删完子批次后，按剩余分配量重算父批次状态（active / partially_split / split）
+   */
+  async function deleteBatch(batchId) {
+    const db = DB.get();
+
+    // 1) 有子批次 → 拒绝
+    const kids = await DB.call(
+      db.from('batch_relations').select('id').eq('source_batch_id', batchId)
+    );
+    if (!kids.ok) return kids;
+    if ((kids.data || []).length > 0) {
+      return { ok: false, error: '该批次已拆分，请先删除子批次' };
+    }
+
+    // 2) 找父批次（若本批次是拆分出来的）
+    const par = await DB.call(
+      db.from('batch_relations').select('id, source_batch_id').eq('target_batch_id', batchId)
+    );
+    if (!par.ok) return par;
+    const parentId = par.data && par.data[0] ? par.data[0].source_batch_id : null;
+
+    // 3) 删掉「父 → 本批次」的关系（FK RESTRICT，必须先删）
+    if (parentId) {
+      const r1 = await DB.call(db.from('batch_relations').delete().eq('target_batch_id', batchId));
+      if (!r1.ok) return { ok: false, error: '删除批次关系失败' };
+    }
+
+    // 4) 删批次本身（batch_progress 级联删除）
+    const r2 = await DB.call(db.from('production_batches').delete().eq('id', batchId));
+    if (!r2.ok) return { ok: false, error: '删除批次失败' };
+
+    // 5) 重算父批次状态
+    if (parentId) await recomputeParentStatus(parentId);
+
+    return { ok: true };
+  }
+
+  /** 按剩余子批次分配量，重算父批次状态 */
+  async function recomputeParentStatus(parentId) {
+    const db = DB.get();
+    const p = await DB.call(
+      db.from('production_batches').select('quantity').eq('id', parentId).maybeSingle()
+    );
+    if (!p.ok || !p.data) return;
+
+    const rel = await DB.call(
+      db.from('batch_relations').select('quantity').eq('source_batch_id', parentId)
+    );
+    const allocated = (rel.data || []).reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+
+    let status;
+    if (allocated === 0) status = 'active';
+    else if (allocated >= Number(p.data.quantity)) status = 'split';
+    else status = 'partially_split';
+
+    await DB.call(db.from('production_batches').update({ status }).eq('id', parentId));
+  }
+
+  return { createRootBatch, listByOrderId, getById, splitBatch, deleteBatch };
 })();
