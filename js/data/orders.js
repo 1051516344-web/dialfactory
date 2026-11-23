@@ -364,6 +364,23 @@ const OrdersAPI = (() => {
       }
     }
 
+    // Step 2c: Delete batches + batch relations BEFORE the order.
+    // production_batches.order_id is ON DELETE RESTRICT — an order with batches
+    // cannot be deleted, which previously left the order half-deleted (nodes gone,
+    // order row + batches still present). batch_progress cascades from batches.
+    const { data: batches } = await DB.call(
+      db.from('production_batches').select('id').eq('order_id', orderId)
+    );
+    const batchIds = (batches || []).map(b => b.id);
+    if (batchIds.length > 0) {
+      const rRel = await DB.call(db.from('batch_relations').delete().in('source_batch_id', batchIds));
+      if (!rRel.ok) return { ok: false, error: 'Failed to delete batch relations', phase: 'batch_relations' };
+      const rRel2 = await DB.call(db.from('batch_relations').delete().in('target_batch_id', batchIds));
+      if (!rRel2.ok) return { ok: false, error: 'Failed to delete batch relations', phase: 'batch_relations' };
+    }
+    const rB = await DB.call(db.from('production_batches').delete().eq('order_id', orderId));
+    if (!rB.ok) return { ok: false, error: 'Failed to delete batches', phase: 'batches' };
+
     // Step 3: Delete order
     const r3 = await DB.call(
       db.from('orders').delete().eq('id', orderId)
