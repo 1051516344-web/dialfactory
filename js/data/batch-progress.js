@@ -36,7 +36,11 @@ const BatchProgressAPI = (() => {
     );
     if (!br.ok) return { ok: false, error: br.error };
 
-    const batches = (br.data || []).filter(function (b) { return b.status !== 'cancelled'; });
+    let batches = (br.data || []).filter(function (b) { return b.status !== 'cancelled'; });
+    // 批次独立流转：只记指定批次（否则记该订单所有批次）
+    if (opts.batchId) {
+      batches = batches.filter(function (b) { return b.id === opts.batchId; });
+    }
     if (batches.length === 0) return { ok: true, skipped: true, reason: 'no_batches' };
 
     const now = new Date().toISOString();

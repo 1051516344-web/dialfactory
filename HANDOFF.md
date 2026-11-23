@@ -479,6 +479,20 @@ POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；�
 
 **约定**：本阶段只做数据与只读展示，不改订单级任何动作。
 
+### 8.18 批次独立流转 P2：订单聚合 + 批次动作编排（2026-11-23）
+
+- `batch-flow.js` 新增纯函数：
+  - `deriveOrderAggregate(events, route, batches)`：每节点聚合状态（覆盖批次才参与；
+    全部 done 才 done、任一 active 即 active、任一 paused 即 paused）
+  - `batchStatusAt` / `nextNodeForBatch` / `deriveBatchCurrent`
+- 新增 `js/domain/batch-actions.js`（仅用于有批次的订单）：
+  `advance / activate / pause / resume / undo` —— 动作作用于 (批次, 节点)，
+  以事件流为唯一状态来源；动作后 `recomputeAggregate()` 把聚合状态写回 order_nodes
+- `batches.js#updateBatch`：更新批次当前位置/状态
+- `batch-progress.js#recordNodeCompletion`：支持 `opts.batchId` 只记指定批次
+
+**原则**：无批次订单仍走 `node-actions`，本模块完全不参与。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）

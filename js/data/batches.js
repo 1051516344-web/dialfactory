@@ -178,5 +178,12 @@ const BatchesAPI = (() => {
     await DB.call(db.from('production_batches').update({ status }).eq('id', parentId));
   }
 
-  return { createRootBatch, listByOrderId, getById, splitBatch, deleteBatch };
+  /** 更新批次字段（当前节点 / 状态等，批次独立流转用） */
+  async function updateBatch(batchId, fields) {
+    return DB.call(
+      DB.get().from('production_batches').update(fields).eq('id', batchId).select().single()
+    );
+  }
+
+  return { createRootBatch, listByOrderId, getById, splitBatch, deleteBatch, updateBatch };
 })();
