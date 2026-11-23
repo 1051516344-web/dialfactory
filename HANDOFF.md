@@ -371,6 +371,21 @@ POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；�
 **边界**：DB 里当前没有「一个订单 ≥2 个批次」的数据，多批次弹窗**尚未实机走过**；
 首次出现多批次订单时需目视确认折叠区渲染。
 
+### 8.11 批次 P3：起始工序 + 历史回填（2026-11-23）
+
+问题：批次建出来只有父子拆分树，`当前位置` 永远 `—`、进度「尚未开始」——
+因为批次不知道自己的「出生工序」，历史也不会追溯。
+
+- `supabase/migrations/022_batch_start_node_backfill.sql`（**需手动执行**）：
+  - `production_batches.start_node_id`（出生工序，可空）
+  - `backfill_batch_progress(p_batch_id)`：出生点为空时自动取订单当前 active 节点；
+    把「出生点起、已 done 的节点」回填进 `batch_progress`（qty_in=批次数量）；当前位置更新为 active 节点
+  - `split_batch()` 替换：子批次继承父批次当前位置作为出生点，并逐批回填
+- `batches.js#createRootBatch`：建批次后调用 `backfill_batch_progress`（失败仅 console.warn，不阻断建批次）
+
+语义：出生点 = 当前 active 节点 → 新批次「0 道完成 · 当前：X工序」，历史如实为空；
+出生点更早 → 补上确实走过的 done 节点。**不碰节点卡片、不新增 UI 按钮。**
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）

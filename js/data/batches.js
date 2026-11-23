@@ -13,7 +13,7 @@ const BatchesAPI = (() => {
   async function createRootBatch({ order_id, batch_no, quantity, color, note }) {
     const user = await DB.getUser();
     const created_by = user ? user.id : null;
-    return DB.call(
+    const res = await DB.call(
       DB.get().from('production_batches')
         .insert({
           order_id,
@@ -27,6 +27,17 @@ const BatchesAPI = (() => {
         .select()
         .single()
     );
+
+    // P3：建批次后立即回填历史 + 初始化当前位置（幂等）。
+    // 出生点由 DB 函数自动取「订单当前 active 节点」；失败不阻断建批次。
+    if (res.ok && res.data && res.data.id) {
+      const bp = await DB.call(
+        DB.get().rpc('backfill_batch_progress', { p_batch_id: res.data.id })
+      );
+      if (!bp.ok) console.warn('[Batches] 批次回填失败:', bp.error);
+    }
+
+    return res;
   }
 
   /**
