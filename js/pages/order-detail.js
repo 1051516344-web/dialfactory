@@ -10,6 +10,7 @@ const OrderDetailPage = (() => {
   let currentExceptions = [];
   let currentProductionRecords = [];
   let currentBatches = [];
+  let currentBatchProgress = [];
   let currentBatchRelations = [];
   let currentLastInspection = null;   // 最近一次巡检记录 { inspected_at } 或 null
 
@@ -47,14 +48,19 @@ const OrderDetailPage = (() => {
 
     // 异常 / 生产记录 / 批次互不依赖 → 三者并行，避免 3 次串行往返
     const nodeIds = currentNodeList.map(n => n.id);
-    const [er, pr, br, ins] = await Promise.all([
+    const [er, pr, br, ins, bpr] = await Promise.all([
       nodeIds.length > 0
         ? ExceptionsAPI.listByNodeIds(nodeIds)
         : Promise.resolve({ ok: true, data: [] }),
       ProductionRecordsAPI.listByOrderId(orderId),
       BatchesAPI.listByOrderId(orderId),
-      OrdersAPI.getLastInspection(orderId)
+      OrdersAPI.getLastInspection(orderId),
+      (typeof BatchProgressAPI !== 'undefined')
+        ? BatchProgressAPI.listByOrderId(orderId)
+        : Promise.resolve({ ok: true, data: [] })
     ]);
+    currentBatchProgress = bpr.ok ? (bpr.data || []) : [];
+    if (!bpr.ok) console.warn('[OrderDetail] 批次进度读取失败（迁移 021 是否已执行？）:', bpr.error);
     currentExceptions = er.ok ? er.data : [];
     currentProductionRecords = pr.ok ? pr.data : [];
     currentLastInspection = ins.ok ? ins.data : null;
@@ -110,6 +116,10 @@ const OrderDetailPage = (() => {
           <div id="drawing-content"></div>
         </div>
         <div id="order-progress-bar">${ProgressBar.render(stats)}</div>
+      </div>
+
+      <div id="order-batch-progress">
+        ${renderBatchProgressPanel()}
       </div>
 
       <div id="order-flow-section">
@@ -941,6 +951,78 @@ const OrderDetailPage = (() => {
   // ==========================================================
   // Production Batch section (Phase 4 · Batch layer)
   // ==========================================================
+  /**
+   * P1 · 只读「批次进度」面板。
+   * 刻意做成独立折叠块：不进节点卡片、不影响巡检与推进操作。
+   */
+  function renderBatchProgressPanel() {
+    const totalNodes = (currentNodeList || []).length;
+    const batches = (currentBatches || []).filter(b => b.status !== 'cancelled');
+
+    if (batches.length === 0) {
+      return `
+        <details class="card" style="margin-top:var(--space-lg);padding:0;">
+          <summary style="cursor:pointer;padding:var(--space-md);font-weight:600;">批次进度</summary>
+          <div style="padding:0 var(--space-md) var(--space-md);font-size:var(--font-size-sm);color:var(--text-secondary);">
+            该订单未拆批次（单色订单可忽略此项）。
+          </div>
+        </details>
+      `;
+    }
+
+    const byBatch = {};
+    (currentBatchProgress || []).forEach(function (r) {
+      if (!byBatch[r.batch_id]) byBatch[r.batch_id] = [];
+      byBatch[r.batch_id].push(r);
+    });
+
+    const rows = batches.map(function (b) {
+      const list = byBatch[b.id] || [];
+      const done = list.length;
+      const last = list.length ? list[list.length - 1] : null;
+      const multi = batches.length > 1;
+
+      const io = last
+        ? (multi
+            ? '进 ' + Format.number(last.qty_in) + ' / 出 —（未按批次拆分）'
+            : '进 ' + Format.number(last.qty_in) +
+              ' / 出 ' + Format.number(last.qty_out != null ? last.qty_out : last.qty_in) +
+              (last.good_qty != null || last.bad_qty != null
+                ? '<br>良 ' + Format.number(last.good_qty || 0) + ' · 次 ' + Format.number(last.bad_qty || 0)
+                : ''))
+        : '尚未开始';
+
+      return `
+        <div style="display:flex;gap:var(--space-md);justify-content:space-between;padding:var(--space-sm) 0;border-top:1px solid var(--bg-muted);font-size:var(--font-size-sm);">
+          <div style="min-width:0;">
+            <div style="font-weight:600;">#${escapeHTML(b.batch_no)}${b.color ? ' · ' + escapeHTML(b.color) : ''}
+              <span style="font-weight:400;color:var(--text-secondary);">${Format.number(b.quantity)}片</span>
+            </div>
+            <div style="color:var(--text-secondary);font-size:var(--font-size-xs);margin-top:2px;">
+              完成 ${done}/${totalNodes} 道${last ? ' · 最近：' + escapeHTML(last.process_name) + '（' + Format.date(last.completed_at) + '）' : ''}
+              ${b.current_process_name && b.current_process_name !== (last && last.process_name)
+                ? ' · 当前：' + escapeHTML(b.current_process_name) : ''}
+            </div>
+          </div>
+          <div style="text-align:right;font-size:var(--font-size-xs);color:var(--text-secondary);white-space:nowrap;">
+            ${io}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <details class="card" style="margin-top:var(--space-lg);padding:0;">
+        <summary style="cursor:pointer;padding:var(--space-md);font-weight:600;">
+          批次进度 <span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（${batches.length} 个批次 · 只读）</span>
+        </summary>
+        <div style="padding:0 var(--space-md) var(--space-md);">
+          ${rows}
+        </div>
+      </details>
+    `;
+  }
+
   function renderBatchSection() {
     const { roots } = BatchState.buildTree(currentBatches, currentBatchRelations);
     const body = currentBatches.length === 0

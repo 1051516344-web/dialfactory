@@ -87,6 +87,11 @@ const NodeActions = (() => {
       }
     }
 
+    // 批次「当前工序」推进到新激活的节点（没有批次时该调用是空操作）
+    if (activatedNode && typeof BatchProgressAPI !== 'undefined' && BatchProgressAPI.setCurrentNode) {
+      await BatchProgressAPI.setCurrentNode(order.id, activatedNode.id, activatedNode.process_name);
+    }
+
     // Derive and update order status（把新激活的节点也并入）
     const nodesForStatus = activatedNode
       ? updatedNodes.map(n => n.id === activatedNode.id ? activatedNode : n)

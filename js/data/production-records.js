@@ -142,7 +142,9 @@ const ProductionRecordsAPI = (() => {
 
     if (existing) {
       if (existing.status === '已完成') return { ok: true, data: existing, skipped: true };
-      return update(existing.id, fields);
+      const res = await update(existing.id, fields);
+      await recordBatchProgress(orderId, node, opts);
+      return res;
     }
 
     const now = new Date().toISOString();
@@ -159,7 +161,26 @@ const ProductionRecordsAPI = (() => {
     };
     if (opts.goodQty != null) row.good_qty = opts.goodQty;
     if (opts.badQty != null) row.bad_qty = opts.badQty;
-    return create(row);
+    const created = await create(row);
+    await recordBatchProgress(orderId, node, opts);
+    return created;
+  }
+
+  /**
+   * P1：节点收口后按批次记一笔（幂等）。失败不影响主流程，只记警告。
+   */
+  async function recordBatchProgress(orderId, node, opts) {
+    if (typeof BatchProgressAPI === 'undefined' || !BatchProgressAPI.recordNodeCompletion) return;
+    try {
+      const bp = await BatchProgressAPI.recordNodeCompletion(orderId, node, {
+        qtyOut: opts.qtyOut,
+        goodQty: opts.goodQty,
+        badQty: opts.badQty
+      });
+      if (!bp || !bp.ok) console.warn('[DB] 批次记账失败:', bp && bp.error);
+    } catch (e) {
+      console.warn('[DB] 批次记账异常:', e && e.message);
+    }
   }
 
   /**

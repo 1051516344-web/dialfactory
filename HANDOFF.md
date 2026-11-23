@@ -339,6 +339,24 @@ POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；�
 **验证**：`node --check` 过；实机走通「1600 → 银白 1000 + 浅灰 600（合计=总数）」、
 「合计 1700 超总数被拦截并提示」、「合计 1500 放行并提示未分配 100」三条路径。
 
+### 8.9 批次 P1：自动记账 + 只读面板（2026-11-23）
+
+- `supabase/migrations/021_batch_progress.sql`（**需手动执行**）：
+  `batch_progress(batch_id, node_id, order_id, process_name, qty_in, qty_out, good_qty, bad_qty, completed_at)`，
+  **UNIQUE(batch_id, node_id)** 即幂等键。
+- 新增 `js/data/batch-progress.js`：
+  - `recordNodeCompletion()` —— 节点收口后为该订单每个非取消批次写一条进度（upsert，可重复执行）
+  - `setCurrentNode()` —— 下游节点激活时，把批次「当前工序」推进到该节点
+- `production-records.js#closeForNode`：收口成功后调用记账；失败只 `console.warn`，**不阻塞推进**
+- `node-actions.js#advance`：`activatedNode` 存在时调用 `setCurrentNode`
+- `order-detail.js`：生产流程**上方**新增只读折叠面板「批次进度」——
+  每批次显示 完成 X/Y 道、最近完成工序与时间、进/出数量；**节点卡片一行未动**
+- 数据诚实性：**单批次**才精确记 qty_out/good/bad；**多批次**只记 qty_in，
+  out/good/bad 写 NULL 并显示「未按批次拆分」——不编造分配数字。
+
+**验证**：`node --check` 全过；5 个桩用例全过（多批次只记 qty_in / 单批次精确 / 未填产出回退 /
+无批次跳过 / 已取消批次不记）；实机确认面板为只读折叠块（0 个按钮）、无批次时给出提示。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）
