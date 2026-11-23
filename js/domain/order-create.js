@@ -40,7 +40,16 @@ const OrderCreate = (() => {
       steps: allSteps
     };
 
-    // 4. Build order data
+    // 4. 多颜色明细（P0）：只在确实拆了颜色时才写入 specs.colors，
+    //    单色/未指定订单保持原样，向后兼容。
+    const colorRows = Array.isArray(formData.colors) ? formData.colors.filter(function (r) {
+      return r && String(r.color || '').trim() && Number(r.qty) > 0;
+    }).map(function (r) {
+      return { color: String(r.color).trim(), qty: Number(r.qty) };
+    }) : [];
+    const specsColors = colorRows.length > 0 ? colorRows : null;
+
+    // 5. Build order data
     const orderData = {
       order_no:      formData.order_no,
       customer_id:   formData.customer_id || null,
@@ -49,6 +58,7 @@ const OrderCreate = (() => {
       base_texture:  formData.base_texture || null,
       // C7: orders.specs JSONB keys — registered contract (see Freeze manifest):
       //   customer_order_no / order_quantity_raw / customer_name_raw
+      //   + colors: [{ color, qty }]（P0 · 多颜色明细，单色订单不写此键）
       //   + drawing_name / drawing_path (set later by StorageAPI.uploadDrawing)
       // Note: plate_color / base_plate_color are NOT collected at creation —
       //   colors live in the customer drawing, not order base info.
@@ -65,6 +75,7 @@ const OrderCreate = (() => {
       status:        'in_production',
       note:          formData.note || null
     };
+    if (specsColors) orderData.specs.colors = specsColors;
 
     // 5. Build nodes data — only selected processes
     const selected = selectedSteps.filter(s => s.selected);

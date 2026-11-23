@@ -13,7 +13,7 @@ const OrderCreatePage = (() => {
 
   async function render() {
     step = 1;
-    formData = {};
+    formData = { colors: [] };   // 多颜色明细：[{ color, qty }]
     processList = [];
     selectedMap = {};
     selectedOrderFile = null;
@@ -52,6 +52,134 @@ const OrderCreatePage = (() => {
   let selectedOrderFile = null; // single merged "客户订单资料" file (image or PDF)
   let recognitionDone = false;  // whether recognition has filled the form this session
   let recognizing = false;      // whether an auto-recognition request is in flight
+
+  // ==========================================================
+  // 多颜色明细（P0）
+  // 订单总数由 OCR 或手填；颜色与数量在这里按行拆。单色订单留空即可。
+  // 约定：只填一行且不写颜色名 → 视为单色/未指定，不写入 specs.colors（向后兼容）。
+  // ==========================================================
+  function renderColorRow(row, i) {
+    const color = row && row.color ? row.color : '';
+    const qty = row && row.qty != null && row.qty !== '' ? String(row.qty) : '';
+    return `
+      <div class="color-row" style="display:flex;gap:var(--space-sm);margin-bottom:var(--space-sm);align-items:center;">
+        <input type="text" class="form-input" placeholder="颜色名，如 银白" value="${escapeHTML(color)}"
+               oninput="OrderCreatePage.onColorInput(${i}, 'color', this.value)" style="flex:1.2;">
+        <input type="number" class="form-input" placeholder="数量" min="0" value="${escapeHTML(qty)}"
+               oninput="OrderCreatePage.onColorInput(${i}, 'qty', this.value)" style="flex:1;">
+        <button type="button" class="btn btn-ghost btn-sm"
+                onclick="OrderCreatePage.removeColorRow(${i})">✕</button>
+      </div>
+    `;
+  }
+
+  /** 从 DOM 回读颜色行 —— 用户输入后点「添加/删除」时不丢已填内容 */
+  function syncColorsFromDom() {
+    const rows = document.querySelectorAll('#color-rows .color-row');
+    if (!rows.length) return;
+    formData.colors = Array.prototype.map.call(rows, function (row) {
+      const inputs = row.querySelectorAll('input');
+      return { color: (inputs[0].value || '').trim(), qty: (inputs[1].value || '').trim() };
+    });
+  }
+
+  function colorSum() {
+    return (formData.colors || []).reduce(function (s, r) {
+      return s + (Number(r.qty) || 0);
+    }, 0);
+  }
+
+  /** 实时显示「颜色合计 / 订单总数 / 未分配」，超总数标红 */
+  function updateColorSum() {
+    const el = document.getElementById('color-sum');
+    if (!el) return;
+    syncColorsFromDom();
+    const total = Number((document.getElementById('form-qty') || {}).value) || 0;
+    const rows = formData.colors || [];
+    if (rows.length === 0) {
+      el.textContent = total ? ('订单总数 ' + total + ' 片 · 未拆颜色（按单色/未指定处理）') : '';
+      el.style.color = 'var(--text-secondary)';
+      return;
+    }
+    const sum = colorSum();
+    const diff = total - sum;
+    let msg = '颜色合计 ' + sum + ' 片 / 订单总数 ' + total + ' 片';
+    if (diff > 0) msg += '（未分配 ' + diff + ' 片，可作为预留损耗）';
+    if (diff < 0) msg += '（⚠ 超出 ' + (-diff) + ' 片）';
+    el.textContent = msg;
+    el.style.color = diff < 0 ? 'var(--color-danger)' : 'var(--text-secondary)';
+  }
+
+  /** 重渲染前把第一步所有输入同步回 formData，避免点「添加颜色」丢内容 */
+  function syncStep1Fields() {
+    const read = function (id) {
+      const el = document.getElementById(id);
+      return el ? (el.value || '') : null;
+    };
+    let v;
+    if ((v = read('form-order-no')) !== null) formData.order_no = v;
+    if ((v = read('form-customer-order-no')) !== null) formData.customer_order_no = v;
+    if ((v = read('form-qty')) !== null) formData.order_qty = v;
+    if ((v = read('form-due')) !== null) formData.due_date = v;
+    if ((v = read('form-texture')) !== null) formData.base_texture = v;
+    if ((v = read('form-note')) !== null) formData.note = v;
+
+    const sel = document.getElementById('form-customer');
+    if (sel) {
+      if (sel.value === '__unmatched__') formData.customer_id = null;
+      else formData.customer_id = sel.value || null;
+    } else {
+      const txt = document.getElementById('form-customer-text');
+      if (txt) {
+        formData.customer_id = null;
+        formData.customer_name = txt.value.trim();
+      }
+    }
+  }
+
+  function addColorRow() {
+    syncStep1Fields();
+    syncColorsFromDom();
+    if (!formData.colors) formData.colors = [];
+    formData.colors.push({ color: '', qty: '' });
+    renderStep1(document.getElementById('page-container'), customerList);
+  }
+
+  function removeColorRow(i) {
+    syncStep1Fields();
+    syncColorsFromDom();
+    if (!formData.colors) formData.colors = [];
+    formData.colors.splice(i, 1);
+    renderStep1(document.getElementById('page-container'), customerList);
+  }
+
+  function onColorInput(i, field, value) {
+    if (!formData.colors) formData.colors = [];
+    if (!formData.colors[i]) formData.colors[i] = { color: '', qty: '' };
+    formData.colors[i][field] = value;
+    updateColorSum();
+  }
+
+  /** 建单提交前的规范化 + 校验（返回 { ok, colors, error, unallocated }） */
+  function normalizeColors(totalQty) {
+    const rows = (formData.colors || [])
+      .map(function (r) { return { color: String(r.color || '').trim(), qty: Number(r.qty) }; })
+      .filter(function (r) { return r.color || (r.qty > 0); });
+
+    // 只填一行且没写颜色名 → 单色/未指定，保持向后兼容
+    if (rows.length === 1 && !rows[0].color) {
+      return { ok: true, colors: [], unallocated: 0 };
+    }
+    for (let i = 0; i < rows.length; i++) {
+      if (!rows[i].color) return { ok: false, error: '第 ' + (i + 1) + ' 行缺少颜色名' };
+      if (!(rows[i].qty > 0)) return { ok: false, error: '第 ' + (i + 1) + ' 行数量必须大于 0' };
+    }
+    const sum = rows.reduce(function (s, r) { return s + r.qty; }, 0);
+    if (sum > totalQty) {
+      return { ok: false, error: '颜色合计 ' + sum + ' 片，超过订单总数 ' + totalQty + ' 片' };
+    }
+    return { ok: true, colors: rows, unallocated: totalQty - sum };
+  }
 
   // ==========================================================
   // Step 1: Basic Info
@@ -101,12 +229,23 @@ const OrderCreatePage = (() => {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
           <div class="form-group">
             <label class="form-label">订单数量 *</label>
-            <input type="number" id="form-qty" class="form-input" placeholder="件数" min="1" value="${escapeHTML(formData.order_qty || '')}">
+            <input type="number" id="form-qty" class="form-input" placeholder="件数" min="1"
+                   value="${escapeHTML(formData.order_qty || '')}"
+                   oninput="OrderCreatePage.updateColorSum()">
           </div>
           <div class="form-group">
             <label class="form-label">交期 *</label>
             <input type="date" id="form-due" class="form-input" value="${escapeHTML(formData.due_date || '')}">
           </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">颜色明细
+            <span style="color:var(--text-secondary);font-weight:400;">（选填；单色订单留空即可）</span>
+          </label>
+          <div id="color-rows">${(formData.colors || []).map(renderColorRow).join('')}</div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="OrderCreatePage.addColorRow()">＋ 添加颜色</button>
+          <div id="color-sum" style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:var(--space-xs);"></div>
         </div>
 
         <div class="form-group">
@@ -143,6 +282,8 @@ const OrderCreatePage = (() => {
         </button>
       </div>
     `;
+
+    updateColorSum();
   }
 
   // ==========================================================
@@ -158,6 +299,18 @@ const OrderCreatePage = (() => {
     formData.note        = document.getElementById('form-note')?.value || '';
     formData.route_id    = null;
     formData.source      = 'manual';
+
+    // 多颜色明细：先回读 DOM，再规范化 + 校验（合计不得超过订单总数）
+    syncColorsFromDom();
+    const colorCheck = normalizeColors(Number(formData.order_qty) || 0);
+    if (!colorCheck.ok) {
+      document.getElementById('step1-errors').innerHTML = '<div>· ' + escapeHTML(colorCheck.error) + '</div>';
+      return;
+    }
+    formData.colors = colorCheck.colors;
+    if (colorCheck.colors.length > 0 && colorCheck.unallocated > 0) {
+      Toast.warning('颜色合计比订单总数少 ' + colorCheck.unallocated + ' 片，已按「未分配/预留损耗」处理');
+    }
 
     const custSelect = document.getElementById('form-customer');
     const custText = document.getElementById('form-customer-text');
@@ -385,6 +538,12 @@ const OrderCreatePage = (() => {
 
     formData.order_quantity_raw = r.order_quantity || null;
 
+    // OCR 只负责总数（多颜色识别准确率不可控）：若还没有颜色明细，
+    // 默认生成一行把总数填进去，用户再按实际颜色拆分。
+    if (qty != null && (!formData.colors || formData.colors.length === 0)) {
+      formData.colors = [{ color: '', qty: String(qty) }];
+    }
+
     recognitionDone = true;
     renderStep1(document.getElementById('page-container'), customerList);
 
@@ -452,5 +611,6 @@ const OrderCreatePage = (() => {
     return DOM.escapeHtml(str);
   }
 
-  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onOrderFileSelected, archiveCustomer };
+  return { render, goToStep2, toggleProcess, filterProcesses, backToStep1, submitOrder, onOrderFileSelected, archiveCustomer,
+           addColorRow, removeColorRow, onColorInput, updateColorSum };
 })();
