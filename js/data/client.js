@@ -5,9 +5,32 @@
 const DB = (() => {
   let client = null;
 
+  // 网络失败计数：10 秒内连续 2 次才弹全局兜底层，避免单次抖动就遮挡界面
+  let netFailures = [];
+
+  function noteNetworkFailure(err) {
+    if (!isNetworkError(err)) return;
+    const now = Date.now();
+    netFailures = netFailures.filter((ts) => now - ts < 10000);
+    netFailures.push(now);
+    if (netFailures.length >= 2 && typeof NetGuard !== 'undefined') {
+      try { NetGuard.report(err); } catch (e) { /* ignore */ }
+    }
+  }
+
   function init() {
     if (client) return client;
     const { createClient } = window.supabase;
+
+    // 安装 fetch 层重试（GET/HEAD，2s → 4s，最多 3 次；写操作不重试）。
+    // 必须在 createClient 之前，保证 SDK 拿到的是包装后的 fetch。
+    if (typeof FetchRetry !== 'undefined') {
+      try {
+        FetchRetry.install({ urlPrefix: CONFIG.SUPABASE_URL });
+      } catch (e) {
+        console.warn('[DB] FetchRetry 安装失败:', e && e.message);
+      }
+    }
     if (!createClient) {
       console.error('[DB] Supabase SDK not loaded');
       return null;
@@ -32,6 +55,7 @@ const DB = (() => {
       return { ok: true, data, count };
     } catch (err) {
       console.error('[DB]', err.message || err);
+      noteNetworkFailure(err);
       return { ok: false, error: err.message || 'Unknown error' };
     }
   }

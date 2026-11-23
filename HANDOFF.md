@@ -273,6 +273,28 @@ WHERE p.code BETWEEN 'P16' AND 'P19' ORDER BY p.code;
   旧内核（Chrome < 80 / iOS < 13.4）会整文件解析失败 → 对应页面白屏；此时 NetGuard 的版本提示可兜住，
   但**要真正支持老平板，需逐文件改写**（未做，列为待办）。
 
+### 8.6 指数退避重试（2026-11-23）
+
+问题：`DB.call()` 收到的是**已发出的 Promise**，失败即耗尽，无法重试；63 个调用点全部改签名风险过高。
+
+方案：新增 `js/utils/fetch-retry.js`，在 fetch 层包装，零调用点改动。
+
+- 只重试 **GET / HEAD**；写操作（POST/PATCH/DELETE）**一律不重试**——避免「请求已到服务端、只是回包丢了」
+  造成重复建单 / 重复计数。
+- 只重试网络类异常；HTTP 401/403/404/500 是正常返回（resolve），天然不触发重试。
+- `AbortError` 不重试；`navigator.onLine === false` 时快速失败，不空等。
+- 退避：**2s → 4s，最多 3 次**；仍失败则抛出，由 `DB.call` 交给 NetGuard 弹层
+  （10 秒内累计 2 次网络失败才弹，避免单次抖动遮挡界面）。
+- 安装点：`DB.init()` 内、`createClient` 之前，且按 `CONFIG.SUPABASE_URL` 前缀限定作用域。
+
+**踩坑记录（重要）**：`const FetchRetry = ...` 这类顶层 `const` **不会**成为 `window.FetchRetry`。
+第一版守卫写的是 `if (window.FetchRetry)`，结果永远为假、重试根本没装上，页面却看不出异常。
+跨文件判定一律用 `typeof X !== 'undefined'`，不要用 `window.X`。
+
+验证：单页桩测 7 个用例全过（失败 2 次后成功=3 次调用 251ms；持续失败=3 次后抛出；Abort=1 次；
+POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；真实页面确认 `FetchRetry.stats().installed === true`
+且 `window.fetch` 已被包装；正常查询（200 空结果）不触发重试。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）

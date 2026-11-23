@@ -49,7 +49,7 @@ const App = (() => {
    */
   function startApp() {
     // 能走到这里说明首屏已可渲染：收起可能由启动期抖动弹出的兜底层
-    if (window.NetGuard) NetGuard.hide();
+    if (typeof NetGuard !== 'undefined') NetGuard.hide();
 
     registerRoutes();
 
@@ -88,7 +88,7 @@ const App = (() => {
       await boot();
     } catch (e) {
       console.error('[DialFactory] 启动失败:', e);
-      if (window.NetGuard) {
+      if (typeof NetGuard !== 'undefined') {
         NetGuard.show(NetGuard.isNetworkLike(e) ? 'network' : 'script');
       } else {
         renderNetworkError();
@@ -101,7 +101,7 @@ const App = (() => {
     const db = DB.init();
     if (!db) {
       // SDK 未就绪（网络未取到 / 脚本被拦）：给明确提示 + 重试入口，不留在骨架屏
-      if (window.NetGuard) {
+      if (typeof NetGuard !== 'undefined') {
         NetGuard.show('script');
       } else {
         document.getElementById('page-container').innerHTML = `
