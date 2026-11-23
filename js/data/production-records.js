@@ -175,7 +175,8 @@ const ProductionRecordsAPI = (() => {
       const bp = await BatchProgressAPI.recordNodeCompletion(orderId, node, {
         qtyOut: opts.qtyOut,
         goodQty: opts.goodQty,
-        badQty: opts.badQty
+        badQty: opts.badQty,
+        perBatch: opts.perBatch
       });
       if (!bp || !bp.ok) console.warn('[DB] 批次记账失败:', bp && bp.error);
     } catch (e) {

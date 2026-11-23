@@ -50,7 +50,9 @@ const NodeActions = (() => {
     if (typeof ProductionRecordsAPI !== 'undefined' && ProductionRecordsAPI.closeForNode) {
       const pr = await ProductionRecordsAPI.closeForNode(order.id, node, {
         goodQty: options.goodQty,
-        badQty: options.badQty
+        badQty: options.badQty,
+        qtyOut: options.qtyOut,
+        perBatch: options.perBatch
       });
       if (!pr.ok) {
         console.error('[advance] 生产记录收口失败:', pr.error);

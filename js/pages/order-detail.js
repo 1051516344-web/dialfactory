@@ -292,11 +292,42 @@ const OrderDetailPage = (() => {
     return currentNodeList.find(n => n.id === id);
   }
 
+  /**
+   * P2 · 多批次订单的「按批次填写」区块。
+   * 刻意放在 <details> 里且默认折叠：不展开时一键完成的体验与原来完全一致。
+   */
+  function renderBatchQtySection(batches) {
+    const rows = batches.map(function (b) {
+      return `
+        <div style="display:flex;gap:var(--space-sm);align-items:center;margin-bottom:var(--space-sm);font-size:var(--font-size-sm);">
+          <span style="flex:1.5;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            #${escapeHTML(b.batch_no)}${b.color ? ' · ' + escapeHTML(b.color) : ''}
+            <span style="color:var(--text-secondary);">(${Format.number(b.quantity)}片)</span>
+          </span>
+          <input type="number" name="b_good_${b.id}" class="form-input" placeholder="良品" min="0" style="flex:1;">
+          <input type="number" name="b_bad_${b.id}" class="form-input" placeholder="次品" min="0" style="flex:1;">
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <details style="margin-top:var(--space-sm);border-top:1px solid var(--bg-muted);padding-top:var(--space-sm);">
+        <summary style="cursor:pointer;font-size:var(--font-size-sm);color:var(--text-secondary);">
+          按批次分别填写（选填；展开后以各批次合计为准）
+        </summary>
+        <div style="margin-top:var(--space-sm);">${rows}</div>
+      </details>
+    `;
+  }
+
   async function onAdvance(nodeId) {
     const node = getNode(nodeId);
     if (!node) return;
 
     const needsQty = Validation.requiresQtyOut(node);
+    const batches = (currentBatches || []).filter(function (b) { return b.status !== 'cancelled'; });
+    const multiBatch = batches.length > 1;
+
     ConfirmDialog.show({
       title: needsQty ? '完成工序（需填产出）' : '完成工序',
       content: `
@@ -317,13 +348,41 @@ const OrderDetailPage = (() => {
         <p style="color:var(--text-muted);font-size:var(--font-size-sm);line-height:1.6;">
           完成后该工序的生产记录会自动结算为「已完成」，无需再单独点「开始生产」。
         </p>
+        ${multiBatch ? renderBatchQtySection(batches) : ''}
       `,
       confirmLabel: '确认完成',
       onConfirm: async (data) => {
+        let goodQty = parseQty(data.good_qty);
+        let badQty = parseQty(data.bad_qty);
+        let qtyOut = needsQty ? data.qtyOut : undefined;
+        let perBatch = null;
+
+        // 多批次且用户确实展开了填写：以各批次合计为准
+        if (multiBatch) {
+          const rows = [];
+          let gSum = 0;
+          let bSum = 0;
+          batches.forEach(function (b) {
+            const g = parseQty(data['b_good_' + b.id]);
+            const bad = parseQty(data['b_bad_' + b.id]);
+            if (g == null && bad == null) return;
+            if (g != null) gSum += g;
+            if (bad != null) bSum += bad;
+            rows.push({ batch_id: b.id, good_qty: g, bad_qty: bad });
+          });
+          if (rows.length > 0) {
+            perBatch = rows;
+            goodQty = gSum;
+            badQty = bSum;
+            if (needsQty && !qtyOut) qtyOut = String(gSum);
+          }
+        }
+
         const result = await NodeActions.advance(currentOrder, node, {
-          qtyOut: needsQty ? data.qtyOut : undefined,
-          goodQty: parseQty(data.good_qty),
-          badQty: parseQty(data.bad_qty)
+          qtyOut: qtyOut,
+          goodQty: goodQty,
+          badQty: badQty,
+          perBatch: perBatch
         });
         handleActionResult(result);
       }

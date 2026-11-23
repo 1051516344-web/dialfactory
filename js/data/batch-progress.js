@@ -41,19 +41,34 @@ const BatchProgressAPI = (() => {
 
     const now = new Date().toISOString();
     const single = batches.length === 1;
-    const qtyOut = opts.qtyOut != null ? Number(opts.qtyOut)
-                 : (single ? Number(batches[0].quantity) : null);
+
+    // P2：用户按批次填了具体数量时，逐批精确记录（优先于单批次推断）
+    const perBatchMap = {};
+    if (Array.isArray(opts.perBatch)) {
+      opts.perBatch.forEach(function (row) {
+        if (row && row.batch_id) perBatchMap[row.batch_id] = row;
+      });
+    }
 
     const rows = batches.map(function (b) {
+      const exact = perBatchMap[b.id];
+      const good = exact && exact.good_qty != null ? Number(exact.good_qty)
+                 : (single && opts.goodQty != null ? Number(opts.goodQty) : null);
+      const bad = exact && exact.bad_qty != null ? Number(exact.bad_qty)
+                : (single && opts.badQty != null ? Number(opts.badQty) : null);
+      let out = null;
+      if (exact) out = (good || 0) + (bad || 0);
+      else if (single) out = opts.qtyOut != null ? Number(opts.qtyOut) : Number(b.quantity);
+
       return {
         batch_id: b.id,
         node_id: node.id,
         order_id: orderId,
         process_name: node.process_name,
         qty_in: Number(b.quantity),
-        qty_out: single ? qtyOut : null,
-        good_qty: single && opts.goodQty != null ? Number(opts.goodQty) : null,
-        bad_qty: single && opts.badQty != null ? Number(opts.badQty) : null,
+        qty_out: out,
+        good_qty: good,
+        bad_qty: bad,
         completed_at: now
       };
     });
