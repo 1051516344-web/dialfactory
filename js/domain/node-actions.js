@@ -35,6 +35,27 @@ const NodeActions = (() => {
     }
   }
 
+  /** 追加一条工序事件（生产轨迹的唯一事实源；失败不阻塞） */
+  async function logEvent(orderId, node, event, extra) {
+    if (typeof NodeEventsAPI === 'undefined' || !NodeEventsAPI.record) return;
+    const opts = extra || {};
+    try {
+      await NodeEventsAPI.record({
+        order_id: orderId,
+        node_id: node && node.id ? node.id : null,
+        process_name: node && node.process_name ? node.process_name : null,
+        event: event,
+        from_status: opts.from || null,
+        to_status: opts.to || null,
+        good_qty: opts.goodQty != null ? Number(opts.goodQty) : null,
+        bad_qty: opts.badQty != null ? Number(opts.badQty) : null,
+        note: opts.note || null
+      });
+    } catch (e) {
+      console.warn('[node-actions] 事件写入异常:', e && e.message);
+    }
+  }
+
   // ==========================================================
   // M1 · advance — active → done
   // ==========================================================
@@ -56,6 +77,11 @@ const NodeActions = (() => {
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
     const updatedNode = r1.data;
+
+    await logEvent(order.id, node, 'done', {
+      from: node.status, to: 'done',
+      goodQty: options.goodQty, badQty: options.badQty
+    });
 
     // 闭环：节点被置为 done 时，必须同步收口它的生产记录。
     // 否则「节点已完成、记录还停在待生产/生产中」——这就是 2026-11-23 排查出的断链。
@@ -139,6 +165,10 @@ const NodeActions = (() => {
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
+    await logEvent(order.id, node, 'pause', {
+      from: node.status, to: 'paused', note: pauseReason
+    });
+
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
     const newStatus = OrderState.derive(updatedNodes, order.status);
     let warning = null;
@@ -167,6 +197,7 @@ const NodeActions = (() => {
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
     await markStarted(order.id, r1.data);
+    await logEvent(order.id, node, 'resume', { from: node.status, to: 'active' });
 
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
     const newStatus = OrderState.derive(updatedNodes, order.status);
@@ -193,6 +224,7 @@ const NodeActions = (() => {
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
     await markStarted(order.id, r1.data);
+    await logEvent(order.id, node, 'activate', { from: node.status, to: 'active' });
 
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
     const newStatus = OrderState.derive(updatedNodes, order.status);
@@ -251,6 +283,10 @@ const NodeActions = (() => {
     const newStatus = OrderState.derive(allNodes, order.status);
     const r3 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r3.ok && !warning) warning = 'status_update_delayed';
+
+    await logEvent(order.id, newNode, 'rework', { to: newNode.status });
+
+    await logEvent(order.id, newNode, 'append', { to: newNode.status });
 
     return { ok: true, newNode, newSeq, needsBump, newOrderStatus: newStatus, warning };
   }
@@ -396,6 +432,8 @@ const NodeActions = (() => {
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
+    await logEvent(order.id, node, 'undo', { from: node.status, to: action.target });
+
     // 反向闭环：撤销「完成」→ 记录退回「生产中」，否则再次完成会被幂等逻辑跳过
     if (node.status === 'done' && typeof ProductionRecordsAPI !== 'undefined'
         && ProductionRecordsAPI.reopenForNode) {
@@ -492,6 +530,10 @@ const NodeActions = (() => {
     const newStatus = OrderState.derive(allNodes, order.status);
     await OrdersAPI.updateStatus(order.id, newStatus);
 
+    for (const n of insertedNodes) {
+      await logEvent(order.id, n, 'rework', { to: n.status });
+    }
+
     return { ok: true, newSeq, needsBump, newOrderStatus: newStatus, warning };
   }
 
@@ -508,6 +550,11 @@ const NodeActions = (() => {
     // 守卫2：返工节点不可单独移除（与 undo 的 F5 一致）
     if (node.rework_pass > 0) {
       return { ok: false, error: '返工节点不可单独移除', phase: 'forbidden' };
+    }
+
+    // 节点移除：清掉它的生产记录；事件由 node_events.node_id 外键 CASCADE 自动删除
+    if (typeof ProductionRecordsAPI !== 'undefined' && ProductionRecordsAPI.deleteByNodeId) {
+      await ProductionRecordsAPI.deleteByNodeId(node.id);
     }
 
     const r1 = await OrdersAPI.deleteNode(node.id);

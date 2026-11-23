@@ -118,6 +118,13 @@ const ProductionRecordsAPI = (() => {
     );
   }
 
+  /** 删除某节点的生产记录（节点被移除时清理，避免孤儿记录） */
+  async function deleteByNodeId(nodeId) {
+    return DB.call(
+      DB.get().from('production_records').delete().eq('node_id', nodeId)
+    );
+  }
+
   /**
    * 节点被置为 active 时调用：把对应记录置为「生产中」并记下真实开工时间（幂等）。
    * 幂等：已有 started_at 就不覆盖（暂停→恢复不应重置开工时间）。
@@ -250,7 +257,7 @@ const ProductionRecordsAPI = (() => {
   }
 
   return {
-    create, createForOrder, update, markStartedForNode, closeForNode, reopenForNode, listByOrderId,
+    create, createForOrder, update, markStartedForNode, closeForNode, reopenForNode, deleteByNodeId, listByOrderId,
     listActive, getRecentActivity, getTodayCompleted
   };
 })();

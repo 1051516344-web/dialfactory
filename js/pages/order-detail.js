@@ -8,7 +8,7 @@ const OrderDetailPage = (() => {
   let currentOrder = null;
   let currentNodeList = [];
   let currentExceptions = [];
-  let currentProductionRecords = [];
+  let currentNodeEvents = [];
   let currentBatches = [];
   let currentBatchProgress = [];
   let currentBatchRelations = [];
@@ -48,21 +48,24 @@ const OrderDetailPage = (() => {
 
     // 异常 / 生产记录 / 批次互不依赖 → 三者并行，避免 3 次串行往返
     const nodeIds = currentNodeList.map(n => n.id);
-    const [er, pr, br, ins, bpr] = await Promise.all([
+    const [er, br, ins, bpr, evr] = await Promise.all([
       nodeIds.length > 0
         ? ExceptionsAPI.listByNodeIds(nodeIds)
         : Promise.resolve({ ok: true, data: [] }),
-      ProductionRecordsAPI.listByOrderId(orderId),
       BatchesAPI.listByOrderId(orderId),
       OrdersAPI.getLastInspection(orderId),
       (typeof BatchProgressAPI !== 'undefined')
         ? BatchProgressAPI.listByOrderId(orderId)
+        : Promise.resolve({ ok: true, data: [] }),
+      (typeof NodeEventsAPI !== 'undefined')
+        ? NodeEventsAPI.listByOrderId(orderId)
         : Promise.resolve({ ok: true, data: [] })
     ]);
+    currentNodeEvents = evr.ok ? (evr.data || []) : [];
+    if (!evr.ok) console.warn('[OrderDetail] 工序事件读取失败（迁移 024 是否已执行？）:', evr.error);
     currentBatchProgress = bpr.ok ? (bpr.data || []) : [];
     if (!bpr.ok) console.warn('[OrderDetail] 批次进度读取失败（迁移 021 是否已执行？）:', bpr.error);
     currentExceptions = er.ok ? er.data : [];
-    currentProductionRecords = pr.ok ? pr.data : [];
     currentLastInspection = ins.ok ? ins.data : null;
     if (br.ok) {
       currentBatches = br.data.batches || [];
@@ -138,7 +141,7 @@ const OrderDetailPage = (() => {
       </div>
 
       <div id="production-timeline-section">
-        ${renderProductionTimeline(currentProductionRecords)}
+        ${renderProductionTimeline(currentNodeEvents)}
       </div>
 
       <div class="section-title" style="margin-top:var(--space-lg);">异常记录 (${currentExceptions.length})</div>
@@ -572,6 +575,11 @@ const OrderDetailPage = (() => {
         currentOrder.nodes = order.nodes || [];
         currentNodeList = currentOrder.nodes;
       }
+      // 结构变化（追加/返工）也要把新事件带上再渲染
+      if (typeof NodeEventsAPI !== 'undefined') {
+        const ev = await NodeEventsAPI.listByOrderId(currentOrder.id);
+        if (ev.ok) currentNodeEvents = ev.data || [];
+      }
       renderFull(document.getElementById('page-container'));
       await loadDrawing(currentOrder);
     } else {
@@ -596,6 +604,8 @@ const OrderDetailPage = (() => {
       updateStatusBadgeDOM(result.newOrderStatus || currentOrder.status);
       // Re-attach header buttons (cancel / trial delete)
       attachHeaderButtons(container);
+      // 轨迹跟着工序动作走：重新拉事件并只刷新该区块
+      await refreshTimeline();
     }
 
     // Warnings
@@ -844,98 +854,64 @@ const OrderDetailPage = (() => {
    * 建单时为整条路线预建的「待生产」记录不进轨迹（计划见上方「生产流程」）。
    * 耗时只按真实 started_at 计算；没有开工时间就不显示耗时，不拿建单时间冒充。
    */
-  function renderProductionTimeline(records) {
-    const activeNode = (currentNodeList || []).find(n => n.status === 'active');
-    const activeNodeId = activeNode ? activeNode.id : null;
-
-    // 同一节点可能有历史重复记录（早期遗留）→ 只保留最新的一条
-    const byNode = {};
-    (records || []).forEach(function (r) {
-      const key = r.node_id || r.id;
-      const prev = byNode[key];
-      if (!prev) { byNode[key] = r; return; }
-      const a = new Date(prev.completed_at || prev.created_at || 0).getTime();
-      const b = new Date(r.completed_at || r.created_at || 0).getTime();
-      if (b >= a) byNode[key] = r;
+  /**
+   * 生产轨迹 = 工序事件流的投影（唯一事实源是 node_events）。
+   * 开始 / 完成 / 暂停 / 恢复 / 撤销 / 追加 / 返工 都会留下一条；
+   * 工序被移除时其事件随外键 CASCADE 删除，轨迹自动同步消失。
+   */
+  function renderProductionTimeline(events) {
+    const list = (events || []).slice().sort(function (a, b) {
+      return new Date(a.occurred_at) - new Date(b.occurred_at);
     });
 
-    const actual = Object.keys(byNode).map(function (k) { return byNode[k]; }).filter(function (r) {
-      return r.status === '已完成' || (activeNodeId && r.node_id === activeNodeId);
-    });
-
-    // 当前进行中节点若还没有记录（历史节点在本次改动前就已激活）→ 用节点信息补一条只读展示
-    if (activeNode && !byNode[activeNode.id]) {
-      actual.push({
-        node_id: activeNode.id,
-        process_name: activeNode.process_name,
-        status: '生产中',
-        started_at: null,
-        completed_at: null,
-        created_at: null
-      });
-    }
-
-    if (actual.length === 0) {
+    if (list.length === 0) {
       return `
         <div class="card">
-          <div class="section-title">生产轨迹（实际）</div>
+          <div class="section-title">生产轨迹</div>
           ${EmptyState.render({
             icon: '📋',
-            title: '还没有实际生产记录',
-            desc: '工序尚未开始或尚未完成。计划中的工序见上方「生产流程」。'
+            title: '还没有工序动作',
+            desc: '开始或完成工序后，这里会按时间记录每一步。'
           })}
         </div>
       `;
     }
 
-    const sorted = [...actual].sort(function (a, b) {
-      const aDone = a.status === '已完成';
-      const bDone = b.status === '已完成';
-      if (aDone !== bDone) return aDone ? -1 : 1;
-      const ka = new Date(a.completed_at || a.started_at || a.created_at).getTime();
-      const kb = new Date(b.completed_at || b.started_at || b.created_at).getTime();
-      return ka - kb;
-    });
+    const META = {
+      activate: { icon: '▶', text: '开始生产', cls: 'active' },
+      done:     { icon: '✓', text: '完成',     cls: 'done' },
+      pause:    { icon: '⏸', text: '暂停',     cls: 'pending' },
+      resume:   { icon: '▶', text: '恢复',     cls: 'active' },
+      undo:     { icon: '↩', text: '撤销',     cls: 'pending' },
+      append:   { icon: '＋', text: '追加工序', cls: 'pending' },
+      rework:   { icon: '↻', text: '返工',     cls: 'pending' }
+    };
 
-    const now = new Date();
+    const entries = list.map(function (e) {
+      const meta = META[e.event] || { icon: '·', text: e.event, cls: 'pending' };
 
-    const entries = sorted.map(function (r) {
-      const done = r.status === '已完成';
-      const icon = done ? '✓' : '▶';
-      const dotClass = done ? 'done' : 'active';
+      const lines = [];
+      lines.push(`<div class="timeline-time">${formatDateTime(e.occurred_at)}</div>`);
 
-      let timeHTML = '';
-      if (done) {
-        if (r.completed_at) {
-          timeHTML += `<div class="timeline-time">完成：${formatDateTime(r.completed_at)}</div>`;
-        }
-        if (r.started_at && r.completed_at) {
-          timeHTML += `<div class="timeline-time" style="color:#16A34A;font-weight:500;">耗时：${formatDuration(new Date(r.started_at), new Date(r.completed_at))}</div>`;
-        } else {
-          timeHTML += `<div class="timeline-time" style="color:var(--text-secondary);">开工时间未记录（不计耗时）</div>`;
-        }
-      } else if (r.started_at) {
-        timeHTML += `<div class="timeline-time">开工：${formatDateTime(r.started_at)}</div>`;
-        timeHTML += `<div class="timeline-time" style="color:#2563EB;font-weight:500;">已进行：${formatDuration(new Date(r.started_at), now)}</div>`;
-      } else {
-        timeHTML += `<div class="timeline-time" style="color:var(--text-secondary);">进行中 · 开工时间未记录</div>`;
+      if (e.good_qty != null || e.bad_qty != null) {
+        const q = [];
+        if (e.good_qty != null) q.push('良品 ' + Format.number(e.good_qty));
+        if (e.bad_qty != null) q.push('次品 ' + Format.number(e.bad_qty));
+        lines.push(`<div class="timeline-time">${q.join(' · ')}</div>`);
       }
-
-      const qty = [];
-      if (r.good_qty != null) qty.push('良品 ' + Format.number(r.good_qty));
-      if (r.bad_qty != null) qty.push('次品 ' + Format.number(r.bad_qty));
-      const qtyHTML = qty.length ? `<div class="timeline-time">${qty.join(' · ')}</div>` : '';
+      if (e.note) {
+        lines.push(`<div class="timeline-time" style="color:var(--text-muted);">${escapeHTML(e.note)}</div>`);
+      }
 
       return `
         <div class="timeline-entry">
-          <div class="timeline-dot ${dotClass}">${icon}</div>
+          <div class="timeline-dot ${meta.cls}">${meta.icon}</div>
           <div class="timeline-content">
             <div class="timeline-header">
-              <span class="timeline-process">${escapeHTML(r.process_name)}</span>
-              ${StatusBadge.render(done ? '已完成' : '生产中')}
+              <span class="timeline-process">${escapeHTML(e.process_name || '—')}</span>
+              <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${meta.text}</span>
             </div>
-            ${timeHTML}
-            ${qtyHTML}
+            ${lines.join('')}
           </div>
         </div>
       `;
@@ -943,12 +919,24 @@ const OrderDetailPage = (() => {
 
     return `
       <div class="card">
-        <div class="section-title">生产轨迹（实际）</div>
+        <div class="section-title">生产轨迹
+          <span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（按工序动作实时记录 · 共 ${list.length} 条）</span>
+        </div>
         <div class="timeline">
           ${entries}
         </div>
       </div>
     `;
+  }
+
+  /** 动作完成后刷新轨迹（事件流是权威数据，重新拉取） */
+  async function refreshTimeline() {
+    if (typeof NodeEventsAPI === 'undefined' || !currentOrder) return;
+    const r = await NodeEventsAPI.listByOrderId(currentOrder.id);
+    if (!r.ok) return;
+    currentNodeEvents = r.data || [];
+    const section = document.getElementById('production-timeline-section');
+    if (section) section.innerHTML = renderProductionTimeline(currentNodeEvents);
   }
 
   function formatDuration(start, end) {
@@ -964,21 +952,6 @@ const OrderDetailPage = (() => {
     if (v == null || v === '') return null;
     const n = parseInt(v, 10);
     return Number.isFinite(n) ? n : null;
-  }
-
-  async function refreshProductionRecords() {
-    const pr = await ProductionRecordsAPI.listByOrderId(currentOrder.id);
-    currentProductionRecords = pr.ok ? pr.data : [];
-    // B10: re-render in place — keep #production-timeline-section so later updates find it
-    const container = document.getElementById('page-container');
-    const timelineSection = document.getElementById('production-timeline-section');
-    if (timelineSection) {
-      timelineSection.innerHTML = renderProductionTimeline(currentProductionRecords);
-    }
-    // Refresh all node cards to update production buttons
-    currentNodeList.forEach(n => updateNodeCardInDOM(n));
-    // Re-attach header buttons
-    attachHeaderButtons(container);
   }
 
   // ==========================================================

@@ -431,6 +431,23 @@ POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；�
 **已知边界**：建单时第一个节点虽为 active，但没有「开工事件」，started_at 为空 →
 它只显示完成时间、不显示耗时。历史记录同理（不追溯编造）。
 
+### 8.15 生产轨迹改为「工序事件流」（2026-11-23）
+
+问题：轨迹依赖建单时预建的 `production_records`（计划），且 `production_records.node_id`
+是 `ON DELETE SET NULL` —— 删掉工序，记录不消失，轨迹留着幽灵条目。
+
+- `supabase/migrations/024_node_events.sql`（**需手动执行**）：
+  `node_events(order_id, node_id, process_name, event, from_status, to_status, good_qty, bad_qty, note, occurred_at)`
+  **`node_id → order_nodes ON DELETE CASCADE`** → 工序被移除时，它的轨迹自动消失；
+  `order_id → orders ON DELETE CASCADE`。含历史回填（done / activate / pause，幂等）。
+- 新增 `js/data/node-events.js`：`listByOrderId` / `record`（失败只告警）
+- `node-actions.js`：`logEvent()` 在 **advance(done) / pause / resume / activate / undo / append / rework / reworkSegment** 八处写入事件
+- `order-detail.js`：轨迹改为渲染事件流（图标：开始/完成/暂停/恢复/撤销/追加工序/返工），
+  动作完成后 `refreshTimeline()` 重新拉取；不再依赖 `production_records`
+- `removeNode`：删除节点前先清掉它的生产记录；其事件由外键 CASCADE 删除
+
+**效果**：轨迹 = 工序动作的投影，开始/暂停/恢复/撤销/追加/返工都留痕；移除工序 → 轨迹同步消失。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）
