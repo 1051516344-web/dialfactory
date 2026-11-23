@@ -1,0 +1,1409 @@
+/* ============================================================
+   DialFactory V1 · P4 Order Detail Page (Core)
+   UI-only. All business operations delegated to NodeActions.
+   ============================================================ */
+
+const OrderDetailPage = (() => {
+
+  let currentOrder = null;
+  let currentNodeList = [];
+  let currentExceptions = [];
+  let currentNodeEvents = [];
+  let currentBatches = [];
+  let currentBatchProgress = [];
+  let selectedBatchId = null;   // 选中的批次（null = 全部）
+  let currentBatchRelations = [];
+  let currentLastInspection = null;   // 最近一次巡检记录 { inspected_at } 或 null
+
+  async function render(orderId) {
+    const container = document.getElementById('page-container');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="page-header"><h1>订单详情</h1></div>
+      ${Skeleton.cards(6)}
+    `;
+
+    // Load data
+    const { ok, data: order, error, phase } = await OrdersAPI.getById(orderId);
+    if (!ok) {
+      // 无效订单链接（已删除 / id 不存在 / 读取异常）：不渲染任何报错界面，
+      // 直接瞬间返回首页。用户明确要求：不要任何"订单不存在"的提示卡片、不要倒计时、不要 Toast。
+      console.warn('[OrderDetail] 订单加载失败，静默返回首页：', phase, error);
+
+      if (phase === 'auth') {
+        // 唯一例外：登录/权限异常不是"订单不存在"，必须让用户知道（否则会误以为订单丢了）
+        Toast.error('登录状态异常，请重新登录');
+        Login.render();
+        return;
+      }
+
+      // not_found / data / query 一律静默跳首页
+      Router.navigate('/');
+      return;
+    }
+
+    currentOrder = order;
+    currentNodeList = order.nodes || [];
+    currentOrder.nodes = currentNodeList; // keep in sync
+
+    // 异常 / 生产记录 / 批次互不依赖 → 三者并行，避免 3 次串行往返
+    const nodeIds = currentNodeList.map(n => n.id);
+    const [er, br, ins, bpr, evr] = await Promise.all([
+      nodeIds.length > 0
+        ? ExceptionsAPI.listByNodeIds(nodeIds)
+        : Promise.resolve({ ok: true, data: [] }),
+      BatchesAPI.listByOrderId(orderId),
+      OrdersAPI.getLastInspection(orderId),
+      (typeof BatchProgressAPI !== 'undefined')
+        ? BatchProgressAPI.listByOrderId(orderId)
+        : Promise.resolve({ ok: true, data: [] }),
+      (typeof NodeEventsAPI !== 'undefined')
+        ? NodeEventsAPI.listByOrderId(orderId)
+        : Promise.resolve({ ok: true, data: [] })
+    ]);
+    currentNodeEvents = evr.ok ? (evr.data || []) : [];
+    if (!evr.ok) console.warn('[OrderDetail] 工序事件读取失败（迁移 024 是否已执行？）:', evr.error);
+    currentBatchProgress = bpr.ok ? (bpr.data || []) : [];
+    if (!bpr.ok) console.warn('[OrderDetail] 批次进度读取失败（迁移 021 是否已执行？）:', bpr.error);
+    currentExceptions = er.ok ? er.data : [];
+    currentLastInspection = ins.ok ? ins.data : null;
+    if (br.ok) {
+      currentBatches = br.data.batches || [];
+      currentBatchRelations = br.data.relations || [];
+    } else {
+      currentBatches = [];
+      currentBatchRelations = [];
+    }
+
+    renderFull(container);
+    await loadDrawing(order);
+  }
+
+  function renderFull(container) {
+    const order = currentOrder;
+    const nodes = currentNodeList;
+    const stats = OrderState.nodeStats(nodes);
+    // ①: pass current order status so a cancelled order stays 'cancelled'
+    // (derive() would otherwise fall through to 'paused' since all nodes were paused)
+    const derivedStatus = OrderState.derive(nodes, order.status);
+
+    const excByNode = {};
+    currentExceptions.forEach(e => {
+      if (!excByNode[e.node_id]) excByNode[e.node_id] = [];
+      excByNode[e.node_id].push(e);
+    });
+
+    const specText = [order.base_texture, order.plate_color, order.specs?.base_plate_color].filter(Boolean).join('+') || '—';
+    const custOrderNo = order.specs?.customer_order_no || '';
+    const hasBatches = (currentBatches || []).some(b => b.status !== 'cancelled');
+    const selectedBatch = selectedBatchId ? (currentBatches || []).find(b => b.id === selectedBatchId) : null;
+
+    container.innerHTML = `
+      <div class="page-header">
+        <a href="#/orders" class="btn btn-ghost" style="font-size:0.85rem;">← 订单列表</a>
+        <h1>#${escapeHTML(order.order_no)}</h1>
+        <span id="order-status-badge">${StatusBadge.render(derivedStatus)}</span>
+        <span id="inspection-ctl" style="margin-left:auto;">${renderInspectionControl()}</span>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;flex-wrap:wrap;gap:var(--space-md);font-size:var(--font-size-sm);">
+          <div><span style="color:var(--text-secondary);">客户:</span> ${escapeHTML(order.customer?.short_name || order.customer?.name || '—')}</div>
+          <div><span style="color:var(--text-secondary);">数量:</span> ${Format.number(order.order_qty)}件</div>
+          <div><span style="color:var(--text-secondary);">交期:</span> ${Format.date(order.due_date)} (${Format.dueDays(order.due_date)})</div>
+          <div><span style="color:var(--text-secondary);">规格:</span> ${escapeHTML(specText)}</div>
+          <div><span style="color:var(--text-secondary);">订单编号:</span> <span style="font-weight:600;color:var(--color-primary);">${escapeHTML(order.order_no)}</span></div>
+          ${custOrderNo ? `<div><span style="color:var(--text-secondary);">客单号:</span> ${escapeHTML(custOrderNo)}</div>` : ''}
+          <div><span style="color:var(--text-secondary);">备注:</span> ${escapeHTML(order.note || '—')}</div>
+        </div>
+        <div id="drawing-section" style="margin-top:var(--space-md);padding-top:var(--space-sm);border-top:1px solid var(--bg-muted);">
+          <span style="font-size:var(--font-size-xs);color:var(--text-secondary);">📎 图纸</span>
+          <div id="drawing-content"></div>
+        </div>
+        <div id="order-progress-bar">${ProgressBar.render(stats)}</div>
+      </div>
+
+      <div id="order-batch-progress">
+        ${renderBatchProgressPanel()}
+      </div>
+
+      <div id="order-flow-section">
+        ${renderBatchSelector()}
+        <div class="section-title" style="margin-top:var(--space-lg);display:flex;align-items:center;gap:var(--space-sm);">
+          <span>${selectedBatch ? '生产流程 · ' + escapeHTML(selectedBatch.color || selectedBatch.batch_no) : '生产流程'}</span>
+          ${!selectedBatch && nodes.length > 0 ? `<button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="OrderDetailPage.onSaveAsTemplate()">保存为模板路线</button>` : ''}
+        </div>
+        ${nodes.length === 0
+          ? EmptyState.render({ icon: '📋', title: '暂无工序节点', desc: '该订单尚未生成工序执行记录。' })
+          : (selectedBatch ? renderBatchFlow(selectedBatch) : renderFlow(nodes, excByNode, hasBatches))
+        }
+      </div>
+
+      <div id="order-batch-section">
+        ${renderBatchSection()}
+      </div>
+
+      <div id="production-timeline-section">
+        ${renderProductionTimeline(currentNodeEvents)}
+      </div>
+
+      <div class="section-title" style="margin-top:var(--space-lg);">异常记录 (${currentExceptions.length})</div>
+      ${currentExceptions.length === 0
+        ? EmptyState.render({ icon: '✅', title: '无异常记录', desc: '该订单暂无质量异常。' })
+        : renderExceptions(currentExceptions, nodes)
+      }
+    `;
+
+    attachHeaderButtons(container);
+  }
+
+  // ==========================================================
+  // Flow Rendering
+  // ==========================================================
+  function renderFlow(nodes, excByNode, readOnly) {
+    const sorted = [...nodes].sort((a, b) => a.seq - b.seq);
+    let html = '<div class="flow-container">';
+
+    sorted.forEach((node, i) => {
+      html += renderNodeCard(node, excByNode[node.id] || [], readOnly);
+      if (i < sorted.length - 1) {
+        html += '<div class="flow-arrow">↓</div>';
+      }
+    });
+
+    html += '</div>';
+    return html;
+  }
+
+  function renderNodeCard(node, exceptions, readOnly) {
+    const iconMap = { waiting: '○', active: '▶', done: '✓', paused: '⏸' };
+    const icon = iconMap[node.status] || '?';
+    const reworkBadge = node.rework_pass > 0
+      ? `<span class="rework-badge" style="background:${CONFIG.REWORK_COLORS[Math.min(node.rework_pass, 3)]};">
+           返工×${node.rework_pass}
+         </span>`
+      : '';
+    const actions = NodeState.getAvailableActions(node);
+
+    // Exceptions inline
+    let excHtml = '';
+    if (exceptions.length > 0) {
+      excHtml = exceptions.map(e => `
+        <div class="exception-card">
+          <span class="exception-type">${escapeHTML(e.type)}</span>
+          · ${e.qty}件
+          ${e.resolution ? `· ${escapeHTML(e.resolution)}` : ''}
+          <span style="color:var(--text-muted);font-size:0.75rem;margin-left:var(--space-xs);">
+            ${Format.date(e.created_at)}
+          </span>
+        </div>
+      `).join('');
+    }
+
+    // Action buttons
+    let actionsHtml = '';
+    // 唯一的完成入口：生产记录的结算由 NodeActions.advance() 内部自动完成，
+    // 不再提供「开始生产 / 生产完成」两个按钮（两条并行路径正是数据错位的根源）。
+    if (actions.includes('advance') && !readOnly) {
+      const label = Validation.requiresQtyOut(node) ? '完成(需填产出)' : '完成';
+      actionsHtml += `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onAdvance('${node.id}')">${label}</button>`;
+    }
+    if (actions.includes('pause') && !readOnly) {
+      actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onPause('${node.id}')">暂停</button>`;
+    }
+    if (actions.includes('resume') && !readOnly) {
+      actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onResume('${node.id}')">恢复</button>`;
+    }
+    if (actions.includes('activate') && !readOnly) {
+      actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onActivate('${node.id}')">激活</button>`;
+    }
+    if (actions.includes('remove')) {
+      const removeLabel = node.status === 'done' ? '删除工序' : '移除';
+      actionsHtml += `<button class="btn btn-danger btn-sm" onclick="OrderDetailPage.onRemove('${node.id}')">${removeLabel}</button>`;
+    }
+    if (actions.includes('rework')) {
+      actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onRework('${node.id}')">返工</button>`;
+    }
+    if (actions.includes('append')) {
+      actionsHtml += `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onAppend('${node.id}')">+ 追加工序</button>`;
+    }
+    if (actions.includes('record_exception')) {
+      actionsHtml += `<button class="btn btn-danger btn-sm" onclick="OrderDetailPage.onRecordException('${node.id}')">记录异常</button>`;
+    }
+
+    // V1.1: Undo (within time window) — B14 moved from string-replace override
+    const elapsed = Date.now() - new Date(node.updated_at).getTime();
+    const undoWindow = (CONFIG.UNDO_WINDOW_MINUTES || 5) * 60 * 1000;
+    const canUndo = (node.status === 'done' || node.status === 'paused' || node.status === 'active')
+                    && elapsed < undoWindow
+                    && currentOrder.status !== 'completed'
+                    && currentOrder.status !== 'cancelled'
+                    && (node.rework_pass || 0) === 0;
+    if (canUndo && !readOnly) {
+      actionsHtml += `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onUndo('${node.id}')">撤销</button>`;
+    }
+
+    // V1.1: Segment rework on done nodes
+    if (node.status === 'done' && node.dept_id && currentOrder.status !== 'completed' && currentOrder.status !== 'cancelled') {
+      actionsHtml += `<button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onSegmentRework('${node.id}')">段返工</button>`;
+    }
+
+    return `
+      <div class="node-card status-${node.status}" data-node-id="${node.id}">
+        <div class="node-header">
+          <span class="node-status-icon">${icon}</span>
+          <span class="node-process-code">${escapeHTML(node.process_code || '—')}</span>
+          <span class="node-process-name">${escapeHTML(node.process_name || '未命名工序')}</span>
+          ${reworkBadge}
+        </div>
+        <div class="node-info">
+          <span>${escapeHTML(node.dept_name || '—')}</span>
+          <span style="margin-left:var(--space-sm);">${CONFIG.STATUS_LABELS[node.status]}</span>
+          ${node.pause_reason ? `<span style="margin-left:var(--space-sm);color:var(--color-paused);">· ${escapeHTML(node.pause_reason)}</span>` : ''}
+          ${node.qty_out != null ? `<span style="margin-left:var(--space-sm);">· 产出: ${node.qty_out}件</span>` : ''}
+        </div>
+        ${excHtml}
+        ${actionsHtml ? `<div class="node-actions">${actionsHtml}</div>` : ''}
+      </div>
+    `;
+  }
+
+  // ==========================================================
+  // Batch Mode（批次独立流转）
+  // ==========================================================
+  function renderBatchSelector() {
+    const active = (currentBatches || []).filter(b => b.status !== 'cancelled');
+    if (active.length === 0) return '';
+    const allCls = !selectedBatchId ? 'btn-primary' : 'btn-ghost';
+    const tabs = active.map(function (b) {
+      const cls = b.id === selectedBatchId ? 'btn-primary' : 'btn-ghost';
+      return `<button class="btn btn-sm ${cls}" onclick="OrderDetailPage.onSelectBatch('${b.id}')">${escapeHTML(b.color || b.batch_no)} ${Format.number(b.quantity)}</button>`;
+    }).join('');
+    return `
+      <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-md);">
+        <button class="btn btn-sm ${allCls}" onclick="OrderDetailPage.onSelectBatch('')">全部</button>
+        ${tabs}
+      </div>`;
+  }
+
+  function renderBatchFlow(batch) {
+    const events = (currentNodeEvents || []).filter(function (e) {
+      return !e.batch_id || e.batch_id === batch.id;
+    });
+    const flow = (typeof BatchFlow !== 'undefined')
+      ? BatchFlow.deriveRoute(events, currentNodeList, batch.start_node_id)
+      : null;
+
+    if (!flow || flow.rows.length === 0) {
+      return EmptyState.render({ icon: '📋', title: '该订单还没有工序路线', desc: '回到「全部」在订单上建立工序，再回来推进批次。' });
+    }
+
+    let lastDoneSeq = -1;
+    flow.rows.forEach(function (r) { if (r.status === 'done' && r.seq > lastDoneSeq) lastDoneSeq = r.seq; });
+
+    const STATUS = {
+      done:    { icon: '✓', text: '已完成', cls: 'done' },
+      active:  { icon: '▶', text: '进行中', cls: 'active' },
+      paused:  { icon: '⏸', text: '已暂停', cls: 'pending' },
+      waiting: { icon: '○', text: '等待中', cls: 'pending' }
+    };
+
+    const rows = flow.rows.map(function (r) {
+      const isCurrent = flow.current && flow.current.nodeId === r.nodeId;
+      const st = STATUS[r.status] || STATUS.waiting;
+
+      let actions = '';
+      if (isCurrent && r.status === 'active') {
+        actions = `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onBatchAction('advance','${r.nodeId}')">完成</button>
+                   <button class="btn btn-warning btn-sm" onclick="OrderDetailPage.onBatchAction('pause','${r.nodeId}')">暂停</button>`;
+      } else if (isCurrent && r.status === 'paused') {
+        actions = `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onBatchAction('resume','${r.nodeId}')">恢复</button>`;
+      } else if (isCurrent && r.status === 'waiting') {
+        actions = `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onBatchAction('activate','${r.nodeId}')">开始</button>`;
+      } else if (r.status === 'done' && r.seq === lastDoneSeq) {
+        actions = `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onBatchAction('undo','${r.nodeId}')">撤销</button>`;
+      }
+
+      const bits = [];
+      if (r.completedAt) bits.push('完成 ' + formatDateTime(new Date(r.completedAt)));
+      if (r.good != null) bits.push('良品 ' + Format.number(r.good));
+      if (r.bad != null) bits.push('次品 ' + Format.number(r.bad));
+
+      return `
+        <div class="node-card status-${r.status}" style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);padding:var(--space-sm) var(--space-md);">
+          <div>
+            <div style="font-weight:600;">${st.icon} ${escapeHTML(r.processName)}
+              <span style="font-weight:400;color:var(--text-secondary);font-size:var(--font-size-sm);">${st.text}</span>
+            </div>
+            ${bits.length ? `<div style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">${bits.join(' · ')}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:var(--space-xs);flex-shrink:0;">${actions}</div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:var(--space-sm);">${rows}</div>
+      <div style="font-size:var(--font-size-xs);color:var(--text-muted);margin-top:var(--space-sm);">完成 ${flow.doneCount}/${flow.total} 道 · 这里的操作只影响「${escapeHTML(batch.color || batch.batch_no)}」这个批次</div>`;
+  }
+
+  function onSelectBatch(batchId) {
+    selectedBatchId = batchId || null;
+    renderFull(document.getElementById('page-container'));
+  }
+
+  async function refreshFull() {
+    await render(currentOrder.id);
+  }
+
+  function handleBatchActionResult(result) {
+    if (!result.ok) { Toast.error(result.error || '操作失败'); return; }
+    Toast.success('已更新');
+    refreshFull();
+  }
+
+  async function onBatchAction(kind, nodeId) {
+    const batch = (currentBatches || []).find(function (b) { return b.id === selectedBatchId; });
+    const node = (currentNodeList || []).find(function (n) { return n.id === nodeId; });
+    if (!batch || !node) return;
+
+    if (kind === 'advance') {
+      ConfirmDialog.show({
+        title: '完成工序',
+        content: `
+          <p>确认完成 <strong>${escapeHTML(node.process_name)}</strong>（批次 ${escapeHTML(batch.color || batch.batch_no)}）？</p>
+          <div class="form-group"><label class="form-label">投入数量 (选填)</label><input type="number" name="qty_in" class="form-input" min="0" placeholder="进入本工序的数量"></div>
+          <div class="form-group"><label class="form-label">良品数 (选填)</label><input type="number" name="good_qty" class="form-input" min="0"></div>
+          <div class="form-group"><label class="form-label">次品数 (选填)</label><input type="number" name="bad_qty" class="form-input" min="0"></div>
+        `,
+        confirmLabel: '确认完成',
+        onConfirm: async (data) => {
+          handleBatchActionResult(await BatchActions.advance(currentOrder, batch, node, {
+            qtyIn: parseQty(data.qty_in),
+            goodQty: parseQty(data.good_qty),
+            badQty: parseQty(data.bad_qty)
+          }));
+        }
+      });
+      return;
+    }
+
+    if (kind === 'pause') {
+      ConfirmDialog.show({
+        title: '暂停原因',
+        content: `<div class="form-group"><select name="reason" class="form-select">${CONFIG.PAUSE_REASONS.map(r => `<option value="${r.value}">${r.label}</option>`).join('')}</select></div>`,
+        confirmLabel: '确认暂停',
+        onConfirm: async (data) => {
+          handleBatchActionResult(await BatchActions.pause(currentOrder, batch, node, data.reason));
+        }
+      });
+      return;
+    }
+
+    if (kind === 'resume') handleBatchActionResult(await BatchActions.resume(currentOrder, batch, node));
+    else if (kind === 'activate') handleBatchActionResult(await BatchActions.activate(currentOrder, batch, node));
+    else if (kind === 'undo') handleBatchActionResult(await BatchActions.undo(currentOrder, batch, node));
+  }
+
+  // ==========================================================
+  // Exception Section
+  // ==========================================================
+  function renderExceptions(exceptions, nodes) {
+    const nodeMap = {};
+    nodes.forEach(n => { nodeMap[n.id] = n; });
+
+    return exceptions.map(e => {
+      const node = nodeMap[e.node_id];
+      return `
+        <div class="card exception-list-card" onclick="Router.navigate('/orders/${currentOrder.id}')">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span class="exception-type" style="font-weight:600;">${escapeHTML(e.type)}</span>
+            <span style="font-size:var(--font-size-sm);color:var(--text-muted);">${Format.date(e.created_at)}</span>
+          </div>
+          <div style="font-size:var(--font-size-sm);color:var(--text-secondary);margin-top:var(--space-xs);">
+            ${e.qty}件 · ${escapeHTML(e.resolution || '—')}
+            ${node ? `· ${escapeHTML(node.process_name || '')}` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ==========================================================
+  // Action Handlers (UI → NodeActions → Toast → Re-render)
+  // ==========================================================
+  function getNode(id) {
+    return currentNodeList.find(n => n.id === id);
+  }
+
+  /**
+   * P2 · 多批次订单的「按批次填写」区块。
+   * 刻意放在 <details> 里且默认折叠：不展开时一键完成的体验与原来完全一致。
+   */
+  function renderBatchQtySection(batches) {
+    const rows = batches.map(function (b) {
+      return `
+        <div style="display:flex;gap:var(--space-sm);align-items:center;margin-bottom:var(--space-sm);font-size:var(--font-size-sm);">
+          <span style="flex:1.5;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            #${escapeHTML(b.batch_no)}${b.color ? ' · ' + escapeHTML(b.color) : ''}
+            <span style="color:var(--text-secondary);">(${Format.number(b.quantity)}片)</span>
+          </span>
+          <input type="number" name="b_good_${b.id}" class="form-input" placeholder="良品" min="0" style="flex:1;">
+          <input type="number" name="b_bad_${b.id}" class="form-input" placeholder="次品" min="0" style="flex:1;">
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <details style="margin-top:var(--space-sm);border-top:1px solid var(--bg-muted);padding-top:var(--space-sm);">
+        <summary style="cursor:pointer;font-size:var(--font-size-sm);color:var(--text-secondary);">
+          按批次分别填写（选填；展开后以各批次合计为准）
+        </summary>
+        <div style="margin-top:var(--space-sm);">${rows}</div>
+      </details>
+    `;
+  }
+
+  async function onAdvance(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+
+    const needsQty = Validation.requiresQtyOut(node);
+    const batches = (currentBatches || []).filter(function (b) { return b.status !== 'cancelled'; });
+    const multiBatch = batches.length > 1;
+
+    ConfirmDialog.show({
+      title: needsQty ? '完成工序（需填产出）' : '完成工序',
+      content: `
+        <p style="margin-bottom:var(--space-md);">确认完成 <strong>${escapeHTML(node.process_name)}</strong> ？</p>
+        ${needsQty ? `
+        <div class="form-group">
+          <label class="form-label">产出数量 *</label>
+          <input type="number" name="qtyOut" class="form-input" placeholder="合格品数量" min="1" autofocus>
+        </div>` : ''}
+        <div class="form-group">
+          <label class="form-label">投入数量 (选填)</label>
+          <input type="number" name="qty_in" class="form-input" placeholder="进入本工序的数量" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">良品数 (选填)</label>
+          <input type="number" name="good_qty" class="form-input" placeholder="件数" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">次品数 (选填)</label>
+          <input type="number" name="bad_qty" class="form-input" placeholder="件数" min="0">
+        </div>
+        <p style="color:var(--text-muted);font-size:var(--font-size-sm);line-height:1.6;">
+          完成后该工序的生产记录会自动结算为「已完成」，无需再单独点「开始生产」。
+        </p>
+        ${multiBatch ? renderBatchQtySection(batches) : ''}
+      `,
+      confirmLabel: '确认完成',
+      onConfirm: async (data) => {
+        let goodQty = parseQty(data.good_qty);
+        let badQty = parseQty(data.bad_qty);
+        const qtyIn = parseQty(data.qty_in);
+        let qtyOut = needsQty ? data.qtyOut : undefined;
+        let perBatch = null;
+
+        // 多批次且用户确实展开了填写：以各批次合计为准
+        if (multiBatch) {
+          const rows = [];
+          let gSum = 0;
+          let bSum = 0;
+          batches.forEach(function (b) {
+            const g = parseQty(data['b_good_' + b.id]);
+            const bad = parseQty(data['b_bad_' + b.id]);
+            if (g == null && bad == null) return;
+            if (g != null) gSum += g;
+            if (bad != null) bSum += bad;
+            rows.push({ batch_id: b.id, good_qty: g, bad_qty: bad });
+          });
+          if (rows.length > 0) {
+            perBatch = rows;
+            goodQty = gSum;
+            badQty = bSum;
+            if (needsQty && !qtyOut) qtyOut = String(gSum);
+          }
+        }
+
+        const result = await NodeActions.advance(currentOrder, node, {
+          qtyIn: qtyIn,
+          qtyOut: qtyOut,
+          goodQty: goodQty,
+          badQty: badQty,
+          perBatch: perBatch
+        });
+        handleActionResult(result);
+      }
+    });
+  }
+
+  async function onPause(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+
+    const options = CONFIG.PAUSE_REASONS.map(r =>
+      `<option value="${r.value}">${r.label}</option>`
+    ).join('');
+
+    ConfirmDialog.show({
+      title: '暂停原因',
+      content: `
+        <div class="form-group">
+          <select name="reason" class="form-select" autofocus>
+            ${options}
+          </select>
+        </div>
+      `,
+      confirmLabel: '确认暂停',
+      onConfirm: async (data) => {
+        const result = await NodeActions.pause(currentOrder, node, data.reason);
+        handleActionResult(result);
+      }
+    });
+  }
+
+  async function onResume(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const result = await NodeActions.resume(currentOrder, node);
+    handleActionResult(result);
+  }
+
+  /** FIX(R46499): 手动激活 waiting 节点（跨部门未自动激活 / 数据异常时的兜底入口） */
+  async function onActivate(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const result = await NodeActions.activate(currentOrder, node);
+    handleActionResult(result);
+  }
+
+  /** FIX(R46500): 移除误加的 waiting 节点（仅未开始的工序可移除，不可恢复） */
+  function onRemove(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+
+    const isDone = node.status === 'done';
+    const warn = isDone
+      ? '该工序已完成，删除后它的生产记录与生产轨迹会一并删除（下游工序不受影响）。'
+      : '仅可移除未开始的工序，移除后不可恢复。';
+
+    ConfirmDialog.show({
+      title: isDone ? '删除已完成工序' : '确认移除工序',
+      content: `
+        <p>确认${isDone ? '删除' : '移除'}工序 <strong>${escapeHTML(node.process_name || '—')}</strong>？</p>
+        <p style="color:var(--color-danger);font-size:var(--font-size-sm);">${warn}</p>
+        ${node.note ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">备注：${escapeHTML(node.note)}</p>` : ''}
+      `,
+      confirmLabel: isDone ? '确认删除' : '确认移除',
+      dangerous: true,
+      onConfirm: async () => {
+        const result = await NodeActions.removeNode(currentOrder, node);
+        handleActionResult(result);
+      }
+    });
+  }
+
+  async function onRework(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+
+    const newPass = (node.rework_pass || 0) + 1;
+    ConfirmDialog.show({
+      title: '确认返工',
+      content: `
+        <p>确认对 <strong>${escapeHTML(node.process_name || '该工序')}</strong> 执行返工？</p>
+        <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">
+          将创建第 ${newPass} 次执行记录。
+        </p>
+      `,
+      confirmLabel: '确认返工',
+      onConfirm: async () => {
+        const result = await NodeActions.rework(currentOrder, node);
+        handleActionResult(result);
+      }
+    });
+  }
+
+  async function onAppend(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+
+    // Load processes for the dropdown
+    const { ok, data: processes } = await ProcessesAPI.listProcesses();
+    if (!ok) { Toast.error('无法加载工序列表'); return; }
+
+    const options = processes.map(p =>
+      `<option value="${p.id}">${escapeHTML(p.code)} ${escapeHTML(p.name)} (${escapeHTML(p.type)})</option>`
+    ).join('');
+
+    ConfirmDialog.show({
+      title: '追加工序',
+      content: `
+        <div class="form-group">
+          <label class="form-label">选择工序 *</label>
+          <select name="processId" class="form-select" autofocus>${options}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">插入位置</label>
+          <p style="font-size:var(--font-size-sm);color:var(--text-secondary);">
+            在 <strong>${escapeHTML(node.process_name || '当前节点')}</strong> 之后
+          </p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">原因（选填）</label>
+          <input type="text" name="reason" class="form-input" placeholder="追加原因">
+        </div>
+      `,
+      confirmLabel: '确认追加',
+      onConfirm: async (data) => {
+        const result = await NodeActions.append(currentOrder, node, data.processId, data.reason);
+        handleActionResult(result);
+      }
+    });
+  }
+
+  async function onRecordException(nodeId) {
+    const typeOptions = CONFIG.EXCEPTION_TYPES.map(t =>
+      `<option value="${t}">${t}</option>`
+    ).join('');
+    const resOptions = CONFIG.EXCEPTION_RESOLUTIONS.map(r =>
+      `<option value="${r}">${r}</option>`
+    ).join('');
+
+    ConfirmDialog.show({
+      title: '记录异常',
+      content: `
+        <div class="form-group">
+          <label class="form-label">缺陷类型 *</label>
+          <select name="type" class="form-select" autofocus>${typeOptions}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">影响数量 *</label>
+          <input type="number" name="qty" class="form-input" placeholder="件数" min="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">处理方式</label>
+          <select name="resolution" class="form-select">${resOptions}</select>
+        </div>
+      `,
+      confirmLabel: '记录异常',
+      dangerous: true,
+      onConfirm: async (data) => {
+        const result = await NodeActions.recordException(nodeId, data);
+        if (result.ok) {
+          Toast.success('异常已记录');
+          // Refresh exceptions
+          const nodeIds = currentNodeList.map(n => n.id);
+          const er = await ExceptionsAPI.listByNodeIds(nodeIds);
+          currentExceptions = er.ok ? er.data : [];
+          renderFull(document.getElementById('page-container'));
+          await loadDrawing(currentOrder);
+        } else {
+          Toast.error(result.error);
+        }
+      }
+    });
+  }
+
+  // ==========================================================
+  // Result Handler — P0-FIX: partial DOM updates for simple operations
+  // ==========================================================
+  async function handleActionResult(result) {
+    if (!result.ok) {
+      Toast.error(result.error || '操作失败');
+      return;
+    }
+
+    // Complex if: newNode created, seq bump failed, or no updatedNode (structural change like segment rework)
+    const isComplex = !!(result.newNode || result.warning === 'seq_bump_failed' || !result.updatedNode);
+
+    if (isComplex) {
+      // B13: structural change (rework/append/segment) — refetch authoritative state
+      // so seq bumps and other node mutations are reflected, not guessed locally.
+      const { ok, data: order } = await OrdersAPI.getById(currentOrder.id);
+      if (ok) {
+        currentOrder = order;
+        currentOrder.nodes = order.nodes || [];
+        currentNodeList = currentOrder.nodes;
+      }
+      // 结构变化（追加/返工）也要把新事件带上再渲染
+      if (typeof NodeEventsAPI !== 'undefined') {
+        const ev = await NodeEventsAPI.listByOrderId(currentOrder.id);
+        if (ev.ok) currentNodeEvents = ev.data || [];
+      }
+      renderFull(document.getElementById('page-container'));
+      await loadDrawing(currentOrder);
+    } else {
+      // Success — update local state
+      if (result.updatedNode) {
+        const idx = currentNodeList.findIndex(n => n.id === result.updatedNode.id);
+        if (idx >= 0) currentNodeList[idx] = result.updatedNode;
+      }
+      if (result.activatedNode) {
+        const idx = currentNodeList.findIndex(n => n.id === result.activatedNode.id);
+        if (idx >= 0) currentNodeList[idx] = result.activatedNode;
+      }
+      if (result.newOrderStatus) {
+        currentOrder.status = result.newOrderStatus;
+      }
+
+      // P0-FIX: Simple — partial DOM update (no full page rebuild)
+      const container = document.getElementById('page-container');
+      updateNodeCardInDOM(result.updatedNode);
+      if (result.activatedNode) updateNodeCardInDOM(result.activatedNode);
+      updateProgressBarDOM();
+      updateStatusBadgeDOM(result.newOrderStatus || currentOrder.status);
+      // Re-attach header buttons (cancel / trial delete)
+      attachHeaderButtons(container);
+      // 轨迹跟着工序动作走：重新拉事件并只刷新该区块
+      await refreshTimeline();
+    }
+
+    // Warnings
+    if (result.warning === 'downstream_activation_failed') {
+      Toast.info('下游激活失败，请手动激活');
+    } else if (result.warning === 'seq_bump_failed') {
+      Toast.info('Seq重算失败，已刷新');
+    }
+  }
+
+  /** P0-FIX: Replace a single node card in the DOM without full page rebuild */
+  function updateNodeCardInDOM(node) {
+    if (!node) return;
+    const card = document.querySelector(`.node-card[data-node-id="${node.id}"]`);
+    if (!card) return;
+
+    const excByNode = {};
+    currentExceptions.forEach(e => {
+      if (!excByNode[e.node_id]) excByNode[e.node_id] = [];
+      excByNode[e.node_id].push(e);
+    });
+
+    const newHTML = renderNodeCard(node, excByNode[node.id] || []);
+    const temp = document.createElement('div');
+    temp.innerHTML = newHTML;
+    const newCard = temp.firstElementChild;
+    if (newCard) card.replaceWith(newCard);
+  }
+
+  /** P0-FIX: Update progress bar without full page rebuild */
+  function updateProgressBarDOM() {
+    const bar = document.getElementById('order-progress-bar');
+    if (!bar) return;
+    const stats = OrderState.nodeStats(currentNodeList);
+    const temp = document.createElement('div');
+    temp.innerHTML = ProgressBar.render(stats);
+    const progressEl = temp.firstElementChild;
+    if (progressEl) {
+      bar.innerHTML = '';
+      bar.appendChild(progressEl);
+    }
+  }
+
+  /** P0-FIX: Update status badge without full page rebuild */
+  function updateStatusBadgeDOM(status) {
+    const badge = document.getElementById('order-status-badge');
+    if (!badge) return;
+    const derivedStatus = status || OrderState.derive(currentNodeList, currentOrder.status);
+    badge.innerHTML = StatusBadge.render(derivedStatus);
+  }
+
+  /** P0-FIX: Re-attach cancel + trial delete buttons to header after partial update */
+  function attachHeaderButtons(container) {
+    if (!currentOrder || currentOrder.status === 'completed' || currentOrder.status === 'cancelled') return;
+    const header = container.querySelector('.page-header');
+    if (!header) return;
+    // Avoid duplicates（注意：页头还有「确认巡检」按钮，不能用"有没有 button"来判断）
+    if (header.querySelector('#btn-cancel-order')) return;
+    const cancelBtn = document.createElement('button');
+    cancelBtn.id = 'btn-cancel-order';
+    cancelBtn.className = 'btn btn-danger btn-sm';
+    cancelBtn.textContent = '取消订单';
+    cancelBtn.style.cssText = 'margin-left:auto;font-size:0.8rem;';
+    cancelBtn.onclick = onCancelOrder;
+    header.appendChild(cancelBtn);
+    const deleteBtn = document.createElement('button');
+    deleteBtn.id = 'btn-trial-delete';
+    deleteBtn.className = 'btn btn-danger btn-sm';
+    deleteBtn.textContent = '试运行清理';
+    deleteBtn.style.cssText = 'margin-left:4px;font-size:0.8rem;background:#DC2626;';
+    deleteBtn.onclick = onDeleteOrder;
+    header.appendChild(deleteBtn);
+  }
+
+  // ==========================================================
+  // 巡检（辅助记录 · order_inspections）
+  // 不写 orders 表，因此不会刷新 updated_at，不影响「未推进时长」排序。
+  // ==========================================================
+  /** 页头巡检控件：今天已巡检 → 灰色小字；否则 → ghost 按钮（附上次巡检时间） */
+  function renderInspectionControl() {
+    const last = currentLastInspection?.inspected_at || null;
+    const lastText = last
+      ? `<span style="font-size:var(--font-size-xs);color:var(--text-secondary);">上次巡检：${escapeHTML(formatInspectedAt(last))}</span>`
+      : '';
+    // 今天已巡检：只留小字（极简，不再提供按钮）
+    if (last && isSameLocalDay(last, new Date())) return lastText;
+    return `<button class="btn btn-ghost btn-sm" onclick="OrderDetailPage.onMarkInspected()">确认巡检</button>`
+      + (lastText ? `<span style="margin-left:var(--space-sm);">${lastText}</span>` : '');
+  }
+
+  function refreshInspectionControl() {
+    const el = document.getElementById('inspection-ctl');
+    if (el) el.innerHTML = renderInspectionControl();
+  }
+
+  /** 确认巡检：追加一行记录 → 按钮消失，改为「上次巡检：今天 HH:mm」 */
+  async function onMarkInspected() {
+    if (!currentOrder) return;
+    const r = await OrdersAPI.markInspected(currentOrder.id);
+    if (!r.ok) { Toast.error(r.error || '记录巡检失败'); return; }
+    currentLastInspection = r.data;
+    refreshInspectionControl();
+    Toast.success('已记录巡检');
+  }
+
+  /** ISO → 「今天 09:30」/「昨天 15:00」/「10-24 09:30」 */
+  function formatInspectedAt(isoStr) {
+    if (!isoStr) return '—';
+    const d = new Date(isoStr);
+    const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+    const startYesterday = new Date(startToday.getTime() - 86400000);
+    if (d >= startToday) return '今天 ' + hhmm;
+    if (d >= startYesterday) return '昨天 ' + hhmm;
+    return `${d.getMonth() + 1}-${d.getDate()} ${hhmm}`;
+  }
+
+  function isSameLocalDay(a, b) {
+    const da = new Date(a), db = new Date(b);
+    return da.getFullYear() === db.getFullYear()
+      && da.getMonth() === db.getMonth()
+      && da.getDate() === db.getDate();
+  }
+
+  function escapeHTML(str) {
+    return DOM.escapeHtml(str);
+  }
+
+  // ==========================================================
+  // Undo, Cancel, Segment Rework (V1.1)
+  // ==========================================================
+  async function onUndo(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const result = await NodeActions.undo(currentOrder, node);
+    handleActionResult(result);
+  }
+
+  async function onCancelOrder() {
+    ConfirmDialog.show({
+      title: '确认取消订单',
+      content: `<p>确认取消订单 <strong>#${escapeHTML(currentOrder.order_no)}</strong>？</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">取消后所有进行中的工序将暂停。此操作不可撤销。</p>`,
+      confirmLabel: '确认取消',
+      dangerous: true,
+      onConfirm: async () => {
+        // Set all active/waiting nodes to paused, checking each result (③)
+        let nodeFailures = 0;
+        for (const n of currentNodeList) {
+          if (n.status === 'active' || n.status === 'waiting') {
+            const r = await OrdersAPI.updateNode(n.id, { status: 'paused', pause_reason: '订单已取消' });
+            if (!r.ok) nodeFailures++;
+          }
+        }
+        const statusResult = await OrdersAPI.updateStatus(currentOrder.id, 'cancelled');
+        if (nodeFailures > 0 || !statusResult.ok) {
+          Toast.error(nodeFailures > 0
+            ? `取消失败：${nodeFailures} 个工序节点更新未生效`
+            : '取消失败：订单状态更新未生效');
+          return;
+        }
+        currentOrder.status = 'cancelled';
+        Toast.info('订单已取消');
+        renderFull(document.getElementById('page-container'));
+        await loadDrawing(currentOrder);
+      }
+    });
+  }
+
+  // ==========================================================
+  // Trial Delete (temporary safety patch)
+  // ==========================================================
+  async function onDeleteOrder() {
+    // Trial Cleanup — Revised Rules (Phase 3-B.3)
+    // Only reject: completed orders
+    // Nodes (waiting/active/paused), exceptions, and rework ARE allowed during trial
+    if (currentOrder.status === 'completed') {
+      Toast.error('已完成订单不可清理'); return;
+    }
+
+    const nodeCount = currentNodeList.length;
+    const exceptionCount = currentExceptions.length;
+
+    const customerName = currentOrder.customer?.short_name || currentOrder.customer?.name || '—';
+
+    ConfirmDialog.show({
+      title: '试运行清理',
+      content: `<p style="color:var(--color-danger);">该功能仅用于删除试运行阶段错误录入的数据。</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">真实生产订单请使用取消订单。</p>
+                <p><strong>#${escapeHTML(currentOrder.order_no)}</strong> · ${escapeHTML(customerName)}</p>
+                ${nodeCount > 0 ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">将同时删除 ${nodeCount} 个工序节点。</p>` : ''}
+                ${exceptionCount > 0 ? `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);">将同时删除 ${exceptionCount} 条异常记录。</p>` : ''}
+                <p style="color:var(--color-danger);font-size:var(--font-size-sm);">⚠ 此操作将永久删除数据，不可恢复。</p>`,
+      confirmLabel: '确认清理',
+      dangerous: true,
+      onConfirm: async () => {
+        const result = await OrdersAPI.deleteOrder(currentOrder.id);
+        if (result.ok) {
+          Toast.success('订单已清理');
+          Router.navigate('/orders');
+        } else {
+          Toast.error(result.error || '清理失败');
+        }
+      }
+    });
+  }
+
+  async function onSegmentRework(nodeId) {
+    const node = getNode(nodeId);
+    if (!node) return;
+    const deptNodes = currentNodeList.filter(n => n.dept_id === node.dept_id).sort((a, b) => a.seq - b.seq);
+    const firstInDept = deptNodes[0];
+    const rangeDesc = firstInDept
+      ? `从 ${escapeHTML(firstInDept.process_code)} ${escapeHTML(firstInDept.process_name)} 到 ${escapeHTML(node.process_code)} ${escapeHTML(node.process_name)}`
+      : `部门段返工`;
+
+    ConfirmDialog.show({
+      title: '确认部门段返工',
+      content: `<p>将对 <strong>${escapeHTML(node.dept_name || '本部门')}</strong> 执行段返工。</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">${rangeDesc}</p>
+                <p style="color:var(--text-secondary);font-size:var(--font-size-sm);">原始节点将保留。新节点将创建。</p>`,
+      confirmLabel: '确认返工',
+      onConfirm: async () => {
+        const result = await NodeActions.reworkSegment(currentOrder, node);
+        handleActionResult(result);
+      }
+    });
+  }
+
+  // NOTE (B14): cancel/delete header buttons are attached inside renderFull() via
+  // attachHeaderButtons(), and undo/segment-rework buttons are rendered directly in
+  // renderNodeCard(). No string-replace overrides are used anymore.
+
+  // ==========================================================
+  // Phase 4: Production Timeline
+  // ==========================================================
+  function formatDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return Format.date(iso) + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /**
+   * 生产轨迹 = 实际发生过的事，不是计划。
+   * 只展示：已完成的记录 + 当前进行中节点对应的记录。
+   * 建单时为整条路线预建的「待生产」记录不进轨迹（计划见上方「生产流程」）。
+   * 耗时只按真实 started_at 计算；没有开工时间就不显示耗时，不拿建单时间冒充。
+   */
+  /**
+   * 生产轨迹 = 工序事件流的投影（唯一事实源是 node_events）。
+   * 开始 / 完成 / 暂停 / 恢复 / 撤销 / 追加 / 返工 都会留下一条；
+   * 工序被移除时其事件随外键 CASCADE 删除，轨迹自动同步消失。
+   */
+  /**
+   * 生产轨迹 = 按工序聚合的生产记录（数据源是 node_events 事件流）。
+   * 显示：开始 / 完成 / 耗时（扣除暂停）/ 投入 / 良品 / 次品 / 损耗。
+   * 与上方「生产流程」的区别：那边是计划与操作，这边是实际发生了什么、用了多久、产了多少。
+   */
+  function renderProductionTimeline(events) {
+    const filtered = selectedBatchId
+      ? (events || []).filter(function (e) { return !e.batch_id || e.batch_id === selectedBatchId; })
+      : events;
+    const rows = (typeof ProductionTimeline !== 'undefined')
+      ? ProductionTimeline.summarize(filtered)
+      : [];
+
+    if (rows.length === 0) {
+      return `
+        <div class="card">
+          <div class="section-title">生产轨迹</div>
+          ${EmptyState.render({
+            icon: '📋',
+            title: '还没有实际生产记录',
+            desc: '工序开始或完成后，这里会记录开始/完成时间、耗时与产量。'
+          })}
+        </div>
+      `;
+    }
+
+    const STATUS = {
+      done:    { icon: '✓', cls: 'done',    text: '已完成' },
+      active:  { icon: '▶', cls: 'active',  text: '进行中' },
+      paused:  { icon: '⏸', cls: 'pending', text: '已暂停' },
+      pending: { icon: '＋', cls: 'pending', text: '待开始' }
+    };
+
+    const entries = rows.map(function (r) {
+      const st = STATUS[r.status] || STATUS.pending;
+
+      const timeBits = [];
+      timeBits.push(r.start ? ('开始 ' + formatDateTime(new Date(r.start))) : '开始未记录');
+      if (r.status === 'done' && r.end) timeBits.push('完成 ' + formatDateTime(new Date(r.end)));
+
+      const elapsed = r.activeMs + r.runningMs;
+      if (elapsed > 0) {
+        timeBits.push((r.status === 'done' ? '耗时 ' : '已进行 ') + formatDuration(new Date(0), new Date(elapsed)));
+      }
+      if (r.pauseCount > 0) timeBits.push('暂停 ' + r.pauseCount + ' 次');
+
+      const qtyBits = [];
+      if (r.qtyIn != null) qtyBits.push('投入 ' + Format.number(r.qtyIn));
+      if (r.good != null) qtyBits.push('良品 ' + Format.number(r.good));
+      if (r.bad != null) qtyBits.push('次品 ' + Format.number(r.bad));
+      if (r.qtyIn != null && (r.good != null || r.bad != null)) {
+        const loss = r.qtyIn - (r.good || 0) - (r.bad || 0);
+        if (loss >= 0) qtyBits.push('损耗 ' + Format.number(loss));
+      }
+
+      return `
+        <div class="timeline-entry">
+          <div class="timeline-dot ${st.cls}">${st.icon}</div>
+          <div class="timeline-content">
+            <div class="timeline-header">
+              <span class="timeline-process">${escapeHTML(r.processName || '—')}</span>
+              <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${st.text}</span>
+            </div>
+            <div class="timeline-time">${timeBits.join(' · ')}</div>
+            ${qtyBits.length ? `<div class="timeline-time">${qtyBits.join(' · ')}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="card">
+        <div class="section-title">生产轨迹（实际）
+          <span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（按工序聚合 · ${rows.length} 道）</span>
+        </div>
+        <div class="timeline">
+          ${entries}
+        </div>
+      </div>
+    `;
+  }
+
+  async function refreshTimeline() {
+    if (typeof NodeEventsAPI === 'undefined' || !currentOrder) return;
+    const r = await NodeEventsAPI.listByOrderId(currentOrder.id);
+    if (!r.ok) return;
+    currentNodeEvents = r.data || [];
+    const section = document.getElementById('production-timeline-section');
+    if (section) section.innerHTML = renderProductionTimeline(currentNodeEvents);
+  }
+
+  function formatDuration(start, end) {
+    const diffMs = end - start;
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours > 0) return `${hours}小时${mins > 0 ? mins + '分' : ''}`;
+    return `${mins}分`;
+  }
+
+  /** B16: parse optional numeric input — null for empty, number for valid (incl. 0). */
+  function parseQty(v) {
+    if (v == null || v === '') return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // ==========================================================
+  // Drawing Display (read-only — no replacement, no deletion)
+  // ==========================================================
+  async function loadDrawing(order) {
+    const section = document.getElementById('drawing-section');
+    const content = document.getElementById('drawing-content');
+    if (!section || !content) {
+      console.warn('[Drawing] Target elements not found in DOM — drawing section will not render');
+      return;
+    }
+
+    const drawingPath = order.specs?.drawing_path;
+    const drawingName = order.specs?.drawing_name || '客户图纸';
+
+    if (!drawingPath) {
+      content.innerHTML = '<span style="font-size:var(--font-size-xs);color:var(--text-muted);">无图纸</span>';
+      return;
+    }
+
+    // Show loading placeholder
+    content.innerHTML = `
+      <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">📎 加载图纸中...</span>
+    `;
+
+    const result = await StorageAPI.getDrawingUrl(drawingPath);
+
+    if (!result.ok) {
+      content.innerHTML = `
+        <span style="font-size:var(--font-size-sm);color:var(--color-danger);">⚠️ 图纸加载失败: ${escapeHTML(result.error)}</span>
+      `;
+      return;
+    }
+
+    const url = result.data;
+    const isImageFile = drawingName.match(/\.(png|jpg|jpeg|webp)$/i);
+
+    if (isImageFile) {
+      content.innerHTML = `
+        <div style="border:1px solid var(--bg-muted);border-radius:8px;overflow:hidden;margin-top:4px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;
+                      padding:var(--space-sm) var(--space-md);background:var(--bg-muted);
+                      font-size:var(--font-size-sm);">
+            <span>📎 ${escapeHTML(drawingName)}</span>
+            <a href="${escapeHTML(url)}" target="_blank" rel="noopener"
+               style="color:var(--color-primary);text-decoration:none;font-weight:500;">下载</a>
+          </div>
+          <a href="${escapeHTML(url)}" target="_blank" rel="noopener">
+            <img src="${escapeHTML(url)}" alt="${escapeHTML(drawingName)}"
+                 style="width:100%;max-height:400px;object-fit:contain;display:block;cursor:pointer;"
+                 onerror="this.style.display='none';">
+          </a>
+        </div>
+      `;
+    } else {
+      // PDF — show download card with prominent "查看" button
+      content.innerHTML = `
+        <div style="display:flex;align-items:center;gap:var(--space-md);padding:var(--space-sm);
+                    border:1px solid var(--bg-muted);border-radius:8px;margin-top:4px;
+                    background:var(--bg-surface);">
+          <span style="font-size:1.5rem;">📄</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:var(--font-size-sm);word-break:break-all;">
+              ${escapeHTML(drawingName)}
+            </div>
+            <div style="font-size:var(--font-size-xs);color:var(--text-secondary);">PDF 图纸</div>
+          </div>
+          <a href="${escapeHTML(url)}" target="_blank" rel="noopener"
+             class="btn btn-primary btn-sm">查看</a>
+        </div>
+      `;
+    }
+  }
+
+  // ==========================================================
+  // Production Batch section (Phase 4 · Batch layer)
+  // ==========================================================
+  /**
+   * P1 · 只读「批次进度」面板。
+   * 刻意做成独立折叠块：不进节点卡片、不影响巡检与推进操作。
+   */
+  function renderBatchProgressPanel() {
+    const totalNodes = (currentNodeList || []).length;
+    const batches = (currentBatches || []).filter(b => b.status !== 'cancelled');
+
+    if (batches.length === 0) {
+      return `
+        <details class="card" style="margin-top:var(--space-lg);padding:0;">
+          <summary style="cursor:pointer;padding:var(--space-md);font-weight:600;">批次进度</summary>
+          <div style="padding:0 var(--space-md) var(--space-md);font-size:var(--font-size-sm);color:var(--text-secondary);">
+            该订单未拆批次（单色订单可忽略此项）。
+          </div>
+        </details>
+      `;
+    }
+
+    const byBatch = {};
+    (currentBatchProgress || []).forEach(function (r) {
+      if (!byBatch[r.batch_id]) byBatch[r.batch_id] = [];
+      byBatch[r.batch_id].push(r);
+    });
+
+    const rows = batches.map(function (b) {
+      const list = byBatch[b.id] || [];
+      const done = list.length;
+      const last = list.length ? list[list.length - 1] : null;
+      const multi = batches.length > 1;
+
+      const io = last
+        ? (multi
+            ? '进 ' + Format.number(last.qty_in) + ' / 出 —（未按批次拆分）'
+            : '进 ' + Format.number(last.qty_in) +
+              ' / 出 ' + Format.number(last.qty_out != null ? last.qty_out : last.qty_in) +
+              (last.good_qty != null || last.bad_qty != null
+                ? '<br>良 ' + Format.number(last.good_qty || 0) + ' · 次 ' + Format.number(last.bad_qty || 0)
+                : ''))
+        : '尚未开始';
+
+      return `
+        <div style="display:flex;gap:var(--space-md);justify-content:space-between;padding:var(--space-sm) 0;border-top:1px solid var(--bg-muted);font-size:var(--font-size-sm);">
+          <div style="min-width:0;">
+            <div style="font-weight:600;">#${escapeHTML(b.batch_no)}${b.color ? ' · ' + escapeHTML(b.color) : ''}
+              <span style="font-weight:400;color:var(--text-secondary);">${Format.number(b.quantity)}片</span>
+            </div>
+            <div style="color:var(--text-secondary);font-size:var(--font-size-xs);margin-top:2px;">
+              完成 ${done}/${totalNodes} 道${last ? ' · 最近：' + escapeHTML(last.process_name) + '（' + Format.date(last.completed_at) + '）' : ''}
+              ${b.current_process_name && b.current_process_name !== (last && last.process_name)
+                ? ' · 当前：' + escapeHTML(b.current_process_name) : ''}
+            </div>
+          </div>
+          <div style="text-align:right;font-size:var(--font-size-xs);color:var(--text-secondary);white-space:nowrap;">
+            ${io}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <details class="card" style="margin-top:var(--space-lg);padding:0;">
+        <summary style="cursor:pointer;padding:var(--space-md);font-weight:600;">
+          批次进度 <span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（${batches.length} 个批次 · 只读）</span>
+        </summary>
+        <div style="padding:0 var(--space-md) var(--space-md);">
+          ${rows}
+        </div>
+      </details>
+    `;
+  }
+
+  function renderBatchSection() {
+    const { roots } = BatchState.buildTree(currentBatches, currentBatchRelations);
+    const body = currentBatches.length === 0
+      ? EmptyState.render({ icon: '🧾', title: '暂无生产批次', desc: '订单数量 ≠ 实际生产数量。请按现场实际创建批次。' })
+      : renderBatchTree(roots);
+
+    return `
+      <div class="section-title" style="margin-top:var(--space-lg);display:flex;align-items:center;gap:var(--space-sm);">
+        <span>生产批次 (${currentBatches.length})</span>
+        <button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="OrderDetailPage.showCreateBatchDialog()">创建批次</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;">${body}</div>
+    `;
+  }
+
+  function renderBatchTree(nodes, depth = 0) {
+    return nodes.map(node => {
+      const indent = depth * 20;
+      return `
+        <div style="padding:var(--space-sm) var(--space-md);border-bottom:1px solid var(--bg-muted);${depth ? `padding-left:${indent + 16}px;` : ''}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);">
+            <span style="font-weight:600;cursor:pointer;" onclick="Router.navigate('/batches/${node.id}')">${depth > 0 ? '├ ' : ''}#${escapeHTML(node.batch_no)}</span>
+            <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${Format.number(node.quantity)}片 · ${escapeHTML(node.color || '—')}</span>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px;">
+            ${batchBadge(node.status)}
+            ${node.status !== 'completed' && node.status !== 'cancelled'
+              ? `<button class="btn btn-ghost btn-sm" onclick="Router.navigate('/batches/${node.id}')">拆分</button>`
+              : ''}
+          </div>
+        </div>
+        ${node.children && node.children.length ? renderBatchTree(node.children.map(c => c.batch), depth + 1) : ''}
+      `;
+    }).join('');
+  }
+
+  function batchBadge(status) {
+    const st = BatchState.statusLabel(status);
+    return `<span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:var(--font-size-xs);color:#fff;background:${st.color};">${escapeHTML(st.label)}</span>`;
+  }
+
+  function showCreateBatchDialog() {
+    if (!currentOrder) return;
+    ConfirmDialog.show({
+      title: '创建批次',
+      content: `
+        <div class="form-group">
+          <label class="form-label">批次编号（人工填写）</label>
+          <input type="text" name="batch_no" class="form-input" placeholder="如 ${escapeHTML(currentOrder.order_no)}-01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">数量</label>
+          <input type="number" name="quantity" class="form-input" min="1" value="${currentOrder.order_qty || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">颜色（可空）</label>
+          <input type="text" name="color" class="form-input" placeholder="银色 / 黑色 / 蓝色">
+        </div>
+        <div class="form-group">
+          <label class="form-label">备注（可空）</label>
+          <input type="text" name="note" class="form-input">
+        </div>
+      `,
+      confirmLabel: '创建',
+      onConfirm: async (formData) => {
+        const batch_no = (formData.batch_no || '').trim();
+        const quantity = Number(formData.quantity);
+        if (!batch_no) { Toast.error('请填写批次编号'); return; }
+        if (!quantity || quantity <= 0) { Toast.error('数量必须大于 0'); return; }
+        const res = await BatchesAPI.createRootBatch({
+          order_id: currentOrder.id,
+          batch_no,
+          quantity,
+          color: formData.color,
+          note: formData.note
+        });
+        if (!res.ok) {
+          Toast.error(res.error || '创建失败');
+          return;
+        }
+        Toast.success('批次已创建');
+        // Refetch batches + re-render the batch section only
+        const br = await BatchesAPI.listByOrderId(currentOrder.id);
+        if (br.ok) {
+          currentBatches = br.data.batches || [];
+          currentBatchRelations = br.data.relations || [];
+        }
+        const section = document.getElementById('order-batch-section');
+        if (section) section.innerHTML = renderBatchSection();
+      }
+    });
+  }
+
+  // ==========================================================
+  // Save current order route as a template (explicit user action)
+  // ==========================================================
+  async function onSaveAsTemplate() {
+    if (!currentOrder || !currentNodeList || currentNodeList.length === 0) return;
+
+    // Build route from current nodes: sort by seq, dedup by process_name
+    // (skip rework duplicates so the template holds the canonical route).
+    const sorted = [...currentNodeList].sort((a, b) => a.seq - b.seq);
+    const seen = new Set();
+    const route = [];
+    for (const n of sorted) {
+      const name = (n.process_name || '').trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      route.push({ process: name, department: n.dept_name || '' });
+    }
+    if (route.length === 0) { Toast.error('当前订单没有可保存的工序'); return; }
+
+    ConfirmDialog.show({
+      title: '保存为模板路线',
+      content: `
+        <p style="font-size:var(--font-size-sm);color:var(--text-secondary);">将当前订单的 ${route.length} 道工序保存为新模板：</p>
+        <p style="font-size:var(--font-size-sm);margin:var(--space-sm) 0;line-height:1.6;">
+          ${route.map((r, i) => (i + 1) + '. ' + escapeHTML(r.process)).join(' → ')}
+        </p>
+        <div class="form-group">
+          <label class="form-label">模板名称 *</label>
+          <input type="text" name="name" class="form-input" placeholder="如 普通油压面" autofocus>
+        </div>
+      `,
+      confirmLabel: '保存',
+      onConfirm: async (data) => {
+        const name = (data.name || '').trim();
+        if (!name) { Toast.error('请输入模板名称'); return; }
+        const processList = route.map((r, i) => ({ order: i + 1, process: r.process, department: r.department }));
+        const result = await RouteTemplatesAPI.createTemplate(name, processList, currentOrder.id);
+        if (result.ok) {
+          Toast.success('已保存为模板：' + name);
+        } else {
+          Toast.error(result.error || '保存失败');
+        }
+      }
+    });
+  }
+
+  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, showCreateBatchDialog, onSaveAsTemplate, onMarkInspected, onSelectBatch, onBatchAction };
+})();
