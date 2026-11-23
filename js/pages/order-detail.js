@@ -832,53 +832,99 @@ const OrderDetailPage = (() => {
   // ==========================================================
   // Phase 4: Production Timeline
   // ==========================================================
+  function formatDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return Format.date(iso) + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /**
+   * 生产轨迹 = 实际发生过的事，不是计划。
+   * 只展示：已完成的记录 + 当前进行中节点对应的记录。
+   * 建单时为整条路线预建的「待生产」记录不进轨迹（计划见上方「生产流程」）。
+   * 耗时只按真实 started_at 计算；没有开工时间就不显示耗时，不拿建单时间冒充。
+   */
   function renderProductionTimeline(records) {
-    if (!records || records.length === 0) {
+    const activeNode = (currentNodeList || []).find(n => n.status === 'active');
+    const activeNodeId = activeNode ? activeNode.id : null;
+
+    // 同一节点可能有历史重复记录（早期遗留）→ 只保留最新的一条
+    const byNode = {};
+    (records || []).forEach(function (r) {
+      const key = r.node_id || r.id;
+      const prev = byNode[key];
+      if (!prev) { byNode[key] = r; return; }
+      const a = new Date(prev.completed_at || prev.created_at || 0).getTime();
+      const b = new Date(r.completed_at || r.created_at || 0).getTime();
+      if (b >= a) byNode[key] = r;
+    });
+
+    const actual = Object.keys(byNode).map(function (k) { return byNode[k]; }).filter(function (r) {
+      return r.status === '已完成' || (activeNodeId && r.node_id === activeNodeId);
+    });
+
+    // 当前进行中节点若还没有记录（历史节点在本次改动前就已激活）→ 用节点信息补一条只读展示
+    if (activeNode && !byNode[activeNode.id]) {
+      actual.push({
+        node_id: activeNode.id,
+        process_name: activeNode.process_name,
+        status: '生产中',
+        started_at: null,
+        completed_at: null,
+        created_at: null
+      });
+    }
+
+    if (actual.length === 0) {
       return `
         <div class="card">
-          <div class="section-title">生产轨迹</div>
-          ${EmptyState.render({ icon: '📋', title: '暂无记录', desc: '该订单尚未录入生产记录。' })}
+          <div class="section-title">生产轨迹（实际）</div>
+          ${EmptyState.render({
+            icon: '📋',
+            title: '还没有实际生产记录',
+            desc: '工序尚未开始或尚未完成。计划中的工序见上方「生产流程」。'
+          })}
         </div>
       `;
     }
 
+    const sorted = [...actual].sort(function (a, b) {
+      const aDone = a.status === '已完成';
+      const bDone = b.status === '已完成';
+      if (aDone !== bDone) return aDone ? -1 : 1;
+      const ka = new Date(a.completed_at || a.started_at || a.created_at).getTime();
+      const kb = new Date(b.completed_at || b.started_at || b.created_at).getTime();
+      return ka - kb;
+    });
+
     const now = new Date();
 
-    const entries = records.map(r => {
-      const statusIcon = { '待生产': '○', '生产中': '▶', '已完成': '✓' };
-      const icon = statusIcon[r.status] || '○';
-      const dotClass = r.status === '生产中' ? 'active' : r.status === '已完成' ? 'done' : 'pending';
+    const entries = sorted.map(function (r) {
+      const done = r.status === '已完成';
+      const icon = done ? '✓' : '▶';
+      const dotClass = done ? 'done' : 'active';
 
-      // Time display varies by status
       let timeHTML = '';
-      if (r.status === '生产中' && r.created_at) {
-        // Active: show start time + live elapsed duration
-        const startTime = Format.date(r.created_at) + ' ' +
-          new Date(r.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        const elapsed = formatDuration(new Date(r.created_at), now);
-        timeHTML = `
-          <div class="timeline-time">开始：${startTime}</div>
-          <div class="timeline-time" style="color:#2563EB;font-weight:500;">已生产：${elapsed}</div>
-        `;
-      } else if (r.status === '已完成' && r.created_at) {
-        // Completed: show start, completion, total duration
-        const startTime = Format.date(r.created_at) + ' ' +
-          new Date(r.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        const endTime = r.completed_at
-          ? Format.date(r.completed_at) + ' ' + new Date(r.completed_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-          : '';
-        const duration = r.completed_at
-          ? formatDuration(new Date(r.created_at), new Date(r.completed_at))
-          : '';
-        timeHTML = `
-          <div class="timeline-time">开始：${startTime}</div>
-          ${endTime ? `<div class="timeline-time">完成：${endTime}</div>` : ''}
-          ${duration ? `<div class="timeline-time" style="color:#16A34A;font-weight:500;">耗时：${duration}</div>` : ''}
-        `;
-      } else if (r.status === '待生产') {
-        // Pending: show status note
-        timeHTML = `<div class="timeline-time" style="color:var(--text-secondary);">等待开始生产</div>`;
+      if (done) {
+        if (r.completed_at) {
+          timeHTML += `<div class="timeline-time">完成：${formatDateTime(r.completed_at)}</div>`;
+        }
+        if (r.started_at && r.completed_at) {
+          timeHTML += `<div class="timeline-time" style="color:#16A34A;font-weight:500;">耗时：${formatDuration(new Date(r.started_at), new Date(r.completed_at))}</div>`;
+        } else {
+          timeHTML += `<div class="timeline-time" style="color:var(--text-secondary);">开工时间未记录（不计耗时）</div>`;
+        }
+      } else if (r.started_at) {
+        timeHTML += `<div class="timeline-time">开工：${formatDateTime(r.started_at)}</div>`;
+        timeHTML += `<div class="timeline-time" style="color:#2563EB;font-weight:500;">已进行：${formatDuration(new Date(r.started_at), now)}</div>`;
+      } else {
+        timeHTML += `<div class="timeline-time" style="color:var(--text-secondary);">进行中 · 开工时间未记录</div>`;
       }
+
+      const qty = [];
+      if (r.good_qty != null) qty.push('良品 ' + Format.number(r.good_qty));
+      if (r.bad_qty != null) qty.push('次品 ' + Format.number(r.bad_qty));
+      const qtyHTML = qty.length ? `<div class="timeline-time">${qty.join(' · ')}</div>` : '';
 
       return `
         <div class="timeline-entry">
@@ -886,9 +932,10 @@ const OrderDetailPage = (() => {
           <div class="timeline-content">
             <div class="timeline-header">
               <span class="timeline-process">${escapeHTML(r.process_name)}</span>
-              ${StatusBadge.render(r.status)}
+              ${StatusBadge.render(done ? '已完成' : '生产中')}
             </div>
             ${timeHTML}
+            ${qtyHTML}
           </div>
         </div>
       `;
@@ -896,7 +943,7 @@ const OrderDetailPage = (() => {
 
     return `
       <div class="card">
-        <div class="section-title">生产轨迹</div>
+        <div class="section-title">生产轨迹（实际）</div>
         <div class="timeline">
           ${entries}
         </div>

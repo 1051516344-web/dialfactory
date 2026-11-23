@@ -49,14 +49,16 @@ const ProductionRecordsAPI = (() => {
     }
     if (updates.status === '已完成') {
       if (!updates.completed_at) updates.completed_at = now;
-      // Fetch current record to get created_at for duration calculation
+      // 耗时基准是「真实开工时间」started_at；没有就不算（不拿建单时间冒充）
       const { ok, data: current } = await DB.call(
-        DB.get().from('production_records').select('created_at').eq('id', id).single()
+        DB.get().from('production_records').select('started_at').eq('id', id).single()
       );
-      if (ok && current && current.created_at) {
-        const start = new Date(current.created_at);
+      if (ok && current && current.started_at) {
+        const start = new Date(current.started_at);
         const end = new Date(updates.completed_at);
         updates.duration_minutes = Math.round((end - start) / (1000 * 60));
+      } else {
+        updates.duration_minutes = null;
       }
     }
 
@@ -117,6 +119,44 @@ const ProductionRecordsAPI = (() => {
   }
 
   /**
+   * 节点被置为 active 时调用：把对应记录置为「生产中」并记下真实开工时间（幂等）。
+   * 幂等：已有 started_at 就不覆盖（暂停→恢复不应重置开工时间）。
+   * 没有记录（追加/返工新增节点）时补建一条。
+   */
+  async function markStartedForNode(orderId, node) {
+    const now = new Date().toISOString();
+    const q = await DB.call(
+      DB.get().from('production_records')
+        .select('id, status, started_at')
+        .eq('order_id', orderId)
+        .eq('node_id', node.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+    );
+    const existing = q.ok && q.data && q.data[0];
+
+    if (existing) {
+      if (existing.started_at) return { ok: true, skipped: true };
+      return DB.call(
+        DB.get().from('production_records')
+          .update({ status: '生产中', started_at: now })
+          .eq('id', existing.id)
+          .select()
+          .single()
+      );
+    }
+
+    return create({
+      order_id: orderId,
+      node_id: node.id,
+      process_name: node.process_name,
+      status: '生产中',
+      created_at: now,
+      started_at: now
+    });
+  }
+
+  /**
    * 节点完成时自动收口生产记录（幂等）。由 NodeActions.advance() 调用。
    * - 有「待生产 / 生产中」记录 → 置「已完成」（DB 触发器补 completed_at + duration_minutes）
    * - 无记录（追加/返工新增的节点）→ 补建一条「已完成」
@@ -156,6 +196,7 @@ const ProductionRecordsAPI = (() => {
       process_name: node.process_name,
       status: '已完成',
       created_at: startedAt,
+      started_at: startedAt,
       completed_at: now,
       duration_minutes: Math.max(0, Math.round((new Date(now) - new Date(startedAt)) / 60000))
     };
@@ -209,7 +250,7 @@ const ProductionRecordsAPI = (() => {
   }
 
   return {
-    create, createForOrder, update, closeForNode, reopenForNode, listByOrderId,
+    create, createForOrder, update, markStartedForNode, closeForNode, reopenForNode, listByOrderId,
     listActive, getRecentActivity, getTodayCompleted
   };
 })();

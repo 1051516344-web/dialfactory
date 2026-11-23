@@ -410,6 +410,27 @@ POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；�
 - `batch-detail.js`：新增「删除批次」按钮（危险色），确认框显示批次号/颜色/数量、
   已有进度记录条数、不可恢复提示；删除成功后回到订单详情。
 
+### 8.14 生产轨迹改为「实际轨迹」+ 真实开工时间（2026-11-23）
+
+问题：轨迹列的是建单时按计划路线预建的「待生产」记录，不是实际发生的事；
+「开始时间」用的是建单时间，导致耗时 = 排队 + 生产，全是假数（P2 删掉「开始生产」后
+系统再无任何地方记录真实开工时间）。
+
+- `supabase/migrations/023_production_started_at.sql`（**需手动执行**）：
+  - `production_records.started_at`
+  - `set_duration_minutes()` 触发器改为：有 started_at 才算耗时；没有则 NULL（不编造）
+- `production-records.js#markStartedForNode`：节点变 active 时置「生产中」并写 started_at（幂等，
+  暂停→恢复不重置）
+- `node-actions.js`：`advance`（自动激活下游）/ `resume` / `activate` 三处调用 markStarted
+- `order-detail.js#renderProductionTimeline`：
+  - 只显示**实际发生过**的：已完成的记录 + 当前进行中节点的记录；计划中的「待生产」不再进轨迹
+  - 同一节点历史重复记录按最新一条去重
+  - 进行中节点若还没有记录 → 用节点信息补一条只读展示
+  - 显示「完成于 X」「开工 X · 耗时 Y」；没有 started_at 就写「开工时间未记录（不计耗时）」
+
+**已知边界**：建单时第一个节点虽为 active，但没有「开工事件」，started_at 为空 →
+它只显示完成时间、不显示耗时。历史记录同理（不追溯编造）。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）

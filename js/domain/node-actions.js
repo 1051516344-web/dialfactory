@@ -21,6 +21,20 @@ const NodeActions = (() => {
     return { ok: false, error: '已有进行中的工序（' + label + '），请先完成或暂停它', phase: 'forbidden' };
   }
 
+  /**
+   * 节点变成 active 时记录「真实开工时间」（失败不阻塞推进）。
+   * 幂等：已有 started_at 不会被覆盖（暂停→恢复不重置开工时间）。
+   */
+  async function markStarted(orderId, node) {
+    if (typeof ProductionRecordsAPI === 'undefined' || !ProductionRecordsAPI.markStartedForNode) return;
+    try {
+      const r = await ProductionRecordsAPI.markStartedForNode(orderId, node);
+      if (!r || !r.ok) console.warn('[node-actions] 开工时间写入失败:', r && r.error);
+    } catch (e) {
+      console.warn('[node-actions] 开工时间写入异常:', e && e.message);
+    }
+  }
+
   // ==========================================================
   // M1 · advance — active → done
   // ==========================================================
@@ -89,6 +103,9 @@ const NodeActions = (() => {
       }
     }
 
+    // 下游节点被激活 → 记录它的真实开工时间
+    if (activatedNode) await markStarted(order.id, activatedNode);
+
     // 批次「当前工序」推进到新激活的节点（没有批次时该调用是空操作）
     if (activatedNode && typeof BatchProgressAPI !== 'undefined' && BatchProgressAPI.setCurrentNode) {
       await BatchProgressAPI.setCurrentNode(order.id, activatedNode.id, activatedNode.process_name);
@@ -149,6 +166,8 @@ const NodeActions = (() => {
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
 
+    await markStarted(order.id, r1.data);
+
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
     const newStatus = OrderState.derive(updatedNodes, order.status);
     let warning = null;
@@ -172,6 +191,8 @@ const NodeActions = (() => {
 
     const r1 = await OrdersAPI.updateNode(node.id, { status: 'active' });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
+
+    await markStarted(order.id, r1.data);
 
     const updatedNodes = (order.nodes || []).map(n => n.id === node.id ? r1.data : n);
     const newStatus = OrderState.derive(updatedNodes, order.status);
