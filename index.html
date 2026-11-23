@@ -38,6 +38,17 @@
     </main>
   </div>
 
+  <!-- 弱网兜底层（默认隐藏，由 js/utils/net-guard.js 控制显示） -->
+  <div id="net-overlay" class="net-overlay" hidden>
+    <div class="net-overlay-card">
+      <p class="net-overlay-icon">📡</p>
+      <p class="net-overlay-title" data-net-title>网络连接断开</p>
+      <p class="net-overlay-body" data-net-body>无法连接服务器，请检查车间 Wi-Fi / 移动数据。</p>
+      <p class="net-overlay-tip" data-net-tip>登录状态不会因此失效；网络恢复后点「重新连接」。</p>
+      <button id="net-retry" class="btn btn-primary" type="button">重新连接</button>
+    </div>
+  </div>
+
   <!-- Import Map：把 @supabase/supabase-js 指向本地 vendor。
        原先指向 https://esm.sh（首屏唯一的第三方跨境依赖，国内经常卡住整页加载）。
        本地化后首屏不再有任何第三方请求；版本与来源见 js/vendor/README.md。 -->
@@ -51,6 +62,7 @@
 
   <!-- JS Infrastructure (IIFE pattern, order matters) -->
   <script src="js/config.js"></script>
+  <script src="js/utils/net-guard.js"></script>
   <script src="js/utils/dom.js"></script>
   <script src="js/utils/format.js"></script>
   <script src="js/utils/router.js"></script>

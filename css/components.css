@@ -191,3 +191,41 @@
 .toast-error   { background: var(--color-danger); }
 .toast-success { background: var(--color-done); }
 .toast-info    { background: var(--color-active); }
+
+/* ============================================================
+   弱网兜底层（js/utils/net-guard.js）
+   默认隐藏；只有全局捕获到网络类错误或低版本浏览器时才显示。
+   ============================================================ */
+.net-overlay {
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: rgba(17, 24, 39, 0.55);
+}
+
+.net-overlay[hidden] { display: none; }
+
+.net-overlay-card {
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-xl);
+}
+
+.net-overlay-icon { font-size: 2rem; line-height: 1.2; margin-bottom: var(--space-sm); }
+.net-overlay-title { font-weight: 600; font-size: var(--font-size-lg); margin-bottom: var(--space-sm); }
+.net-overlay-body { color: var(--text-primary); font-size: var(--font-size-sm); line-height: 1.6; margin-bottom: var(--space-xs); }
+.net-overlay-tip { color: var(--text-muted); font-size: var(--font-size-sm); line-height: 1.6; margin-bottom: var(--space-lg); }
+.net-overlay .btn { width: 100%; }
+
+/* 没有 flex 的极旧内核也要能看见文字与按钮 */
+@supports not (display: flex) {
+  .net-overlay { display: block; padding-top: 18vh; }
+}

@@ -64,7 +64,7 @@ const DB = (() => {
     try {
       const { data, error } = await c.auth.getUser();
       if (error) return { user: null, error, networkError: isNetworkError(error) };
-      return { user: data?.user || null, error: null, networkError: false };
+      return { user: (data && data.user) || null, error: null, networkError: false };
     } catch (e) {
       return { user: null, error: e, networkError: isNetworkError(e) };
     }
@@ -85,7 +85,7 @@ const DB = (() => {
     if (!c) return null;
     try {
       const { data } = await c.auth.getSession();
-      return data?.session || null;
+      return (data && data.session) || null;
     } catch (e) {
       console.warn('[DB] awaitSession failed:', e);
       return null;

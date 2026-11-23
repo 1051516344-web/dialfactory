@@ -48,6 +48,9 @@ const App = (() => {
    * 抽出来的目的：有本地会话时可以立刻渲染首屏，把 token 校验丢到后台。
    */
   function startApp() {
+    // 能走到这里说明首屏已可渲染：收起可能由启动期抖动弹出的兜底层
+    if (window.NetGuard) NetGuard.hide();
+
     registerRoutes();
 
     // Mount navigation
@@ -80,16 +83,34 @@ const App = (() => {
 
   async function init() {
     console.log('[DialFactory] V1 Initializing...');
+    // 任何未预料的异常都不允许留下白屏：统一兜到 NetGuard 的提示层
+    try {
+      await boot();
+    } catch (e) {
+      console.error('[DialFactory] 启动失败:', e);
+      if (window.NetGuard) {
+        NetGuard.show(NetGuard.isNetworkLike(e) ? 'network' : 'script');
+      } else {
+        renderNetworkError();
+      }
+    }
+  }
 
+  async function boot() {
     // Init Supabase
     const db = DB.init();
     if (!db) {
-      document.getElementById('page-container').innerHTML = `
-        <div class="card" style="text-align:center;margin-top:48px;">
-          <p style="font-size:1.5rem;margin-bottom:8px;">⚠️</p>
-          <p style="color:var(--color-danger);">无法连接到数据库。请检查网络后刷新。</p>
-        </div>
-      `;
+      // SDK 未就绪（网络未取到 / 脚本被拦）：给明确提示 + 重试入口，不留在骨架屏
+      if (window.NetGuard) {
+        NetGuard.show('script');
+      } else {
+        document.getElementById('page-container').innerHTML = `
+          <div class="card" style="text-align:center;margin-top:48px;">
+            <p style="font-size:1.5rem;margin-bottom:8px;">⚠️</p>
+            <p style="color:var(--color-danger);">无法连接到数据库。请检查网络后刷新。</p>
+          </div>
+        `;
+      }
       return;
     }
 

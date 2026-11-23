@@ -256,6 +256,23 @@ WHERE p.code BETWEEN 'P16' AND 'P19' ORDER BY p.code;
   **不新增编码、不重排顺序**。
 - 前端：新建订单「备注」框下方提示 `注：若含喷金油/消光，请在备注写明具体型号/要求。`
 
+### 8.5 弱网兜底层（2026-11-23）
+
+背景：工厂平板偶发「网络连接异常」，飞行模式开关一次（重置 DNS/连接）即恢复。
+原实现只在「无本地会话 + 离线」时给提示，**会话中途断网仍会白屏或停在骨架屏**。
+
+- 新增 `js/utils/net-guard.js`（ES5、无依赖，紧跟 `config.js` 加载）：
+  - 捕获 `unhandledrejection` 与运行期 `error`，按与 `DB.isNetworkError` 同一套正则判定网络类错误 → 弹层
+  - 监听 `offline` / `online`：断网立即提示，恢复自动收起
+  - 「重新连接」按钮 = `location.reload()`（`#net-retry`，事件绑定，不用内联 onclick）
+  - 低版本浏览器探测：`new Function` 试解析 `?.` / `??`，不支持则提示「浏览器版本过低」而不是白屏
+- `index.html`：新增默认隐藏的 `#net-overlay`；`app.js`：`init()` 包 try/catch → `boot()`，DB 未就绪也走同一提示层。
+- `js/data/client.js`：移除启动关键路径上的 2 处可选链（`data?.user` / `data?.session`），改写为 `data && data.user`。
+- **仍存在的兼容风险**：10 个页面文件（dashboard / order-detail / order-list / order-create / exception-list /
+  batch-detail / storage / recognize / node-state / node-actions / seq-calc）里仍有 `?.` / `??`。
+  旧内核（Chrome < 80 / iOS < 13.4）会整文件解析失败 → 对应页面白屏；此时 NetGuard 的版本提示可兜住，
+  但**要真正支持老平板，需逐文件改写**（未做，列为待办）。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）
