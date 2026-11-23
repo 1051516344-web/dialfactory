@@ -9,6 +9,7 @@ const BatchDetailPage = (() => {
   let currentBatch = null;
   let currentParents = [];
   let currentChildren = [];
+  let currentFlow = null;   // 该批次的路线进度（由事件流推导）
 
   async function render(batchId) {
     const container = document.getElementById('page-container');
@@ -35,6 +36,31 @@ const BatchDetailPage = (() => {
     currentBatch = data.batch;
     currentParents = data.parents || [];
     currentChildren = data.children || [];
+
+    // P1：从事件流推导该批次自己的工序进度（只读）
+    try {
+      const [nodesRes, evRes] = await Promise.all([
+        DB.call(DB.get().from('order_nodes')
+          .select('id, seq, process_name, status')
+          .eq('order_id', currentBatch.order_id)
+          .order('seq', { ascending: true })),
+        (typeof NodeEventsAPI !== 'undefined')
+          ? NodeEventsAPI.listByOrderId(currentBatch.order_id)
+          : Promise.resolve({ ok: true, data: [] })
+      ]);
+      const route = nodesRes.ok ? (nodesRes.data || []) : [];
+      const allEvents = evRes.ok ? (evRes.data || []) : [];
+      // 本批次事件 + 026 之前的历史共享事件（batch_id 为空）
+      const visible = allEvents.filter(function (e) {
+        return !e.batch_id || e.batch_id === currentBatch.id;
+      });
+      currentFlow = (typeof BatchFlow !== 'undefined')
+        ? BatchFlow.deriveRoute(visible, route, currentBatch.start_node_id)
+        : null;
+    } catch (e) {
+      console.warn('[BatchDetail] 批次进度推导失败:', e && e.message);
+      currentFlow = null;
+    }
 
     renderFull(container);
   }
@@ -64,6 +90,11 @@ const BatchDetailPage = (() => {
         </div>
       </div>
 
+      <div class="section-title" style="margin-top:var(--space-lg);">工序进度
+        ${currentFlow ? `<span style="font-weight:400;font-size:var(--font-size-sm);color:var(--text-secondary);">（完成 ${currentFlow.doneCount}/${currentFlow.total} 道${currentFlow.current ? ' · 当前：' + escapeHTML(currentFlow.current.processName) : ' · 已全部完成'}）</span>` : ''}
+      </div>
+      ${renderFlowRows()}
+
       <div class="section-title" style="margin-top:var(--space-lg);">父批次</div>
       ${currentParents.length === 0
         ? `<div class="card" style="color:var(--text-secondary);font-size:var(--font-size-sm);">无（根批次）</div>`
@@ -81,6 +112,42 @@ const BatchDetailPage = (() => {
         <button class="btn btn-danger" onclick="BatchDetailPage.onDeleteBatch()">删除批次</button>
       </div>
     `;
+  }
+
+  /** 只读：该批次在每道工序上的状态（由事件流推导，不是写死的状态字段） */
+  function renderFlowRows() {
+    if (!currentFlow || currentFlow.rows.length === 0) {
+      return `<div class="card" style="color:var(--text-secondary);font-size:var(--font-size-sm);">该订单还没有工序路线。</div>`;
+    }
+
+    const STATUS = {
+      done:    { icon: '✓', text: '已完成', color: 'var(--color-done)' },
+      active:  { icon: '▶', text: '进行中', color: 'var(--color-active)' },
+      paused:  { icon: '⏸', text: '已暂停', color: 'var(--color-paused)' },
+      waiting: { icon: '○', text: '等待中', color: 'var(--text-muted)' }
+    };
+
+    const rows = currentFlow.rows.map(function (r) {
+      const st = STATUS[r.status] || STATUS.waiting;
+      const bits = [];
+      if (r.completedAt) bits.push('完成 ' + Format.date(new Date(r.completedAt).toISOString()));
+      if (r.good != null) bits.push('良品 ' + Format.number(r.good));
+      if (r.bad != null) bits.push('次品 ' + Format.number(r.bad));
+
+      return `
+        <div style="padding:var(--space-sm) var(--space-md);border-bottom:1px solid var(--bg-muted);display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);">
+          <div>
+            <span style="font-weight:${r.status === 'waiting' ? '400' : '600'};color:${r.status === 'waiting' ? 'var(--text-secondary)' : 'inherit'};">
+              ${escapeHTML(r.processName)}
+            </span>
+            ${bits.length ? `<div style="font-size:var(--font-size-xs);color:var(--text-secondary);margin-top:2px;">${bits.join(' · ')}</div>` : ''}
+          </div>
+          <span style="font-size:var(--font-size-sm);color:${st.color};white-space:nowrap;">${st.icon} ${st.text}</span>
+        </div>
+      `;
+    }).join('');
+
+    return `<div class="card" style="padding:0;overflow:hidden;">${rows}</div>`;
   }
 
   function renderParentRows() {
