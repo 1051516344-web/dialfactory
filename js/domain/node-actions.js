@@ -43,6 +43,21 @@ const NodeActions = (() => {
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
     const updatedNode = r1.data;
 
+    // 闭环：节点被置为 done 时，必须同步收口它的生产记录。
+    // 否则「节点已完成、记录还停在待生产/生产中」——这就是 2026-11-23 排查出的断链。
+    // 失败不阻塞推进（记录可事后补），但要把警告带出去。
+    let productionWarning = null;
+    if (typeof ProductionRecordsAPI !== 'undefined' && ProductionRecordsAPI.closeForNode) {
+      const pr = await ProductionRecordsAPI.closeForNode(order.id, node, {
+        goodQty: options.goodQty,
+        badQty: options.badQty
+      });
+      if (!pr.ok) {
+        console.error('[advance] 生产记录收口失败:', pr.error);
+        productionWarning = 'production_record_sync_failed';
+      }
+    }
+
     // Auto-activate next waiting node (with empty dept skip — Issue I-1)
     let activatedNode = null;
     let warning = null;
@@ -80,7 +95,8 @@ const NodeActions = (() => {
     const r3 = await OrdersAPI.updateStatus(order.id, newStatus);
     if (!r3.ok && !warning) warning = 'status_update_delayed';
 
-    return { ok: true, updatedNode, activatedNode, newOrderStatus: newStatus, warning };
+    return { ok: true, updatedNode, activatedNode, newOrderStatus: newStatus,
+             warning: warning || productionWarning };
   }
 
   // ==========================================================
@@ -351,6 +367,13 @@ const NodeActions = (() => {
       pause_reason: null
     });
     if (!r1.ok) return { ok: false, error: r1.error, phase: 'primary' };
+
+    // 反向闭环：撤销「完成」→ 记录退回「生产中」，否则再次完成会被幂等逻辑跳过
+    if (node.status === 'done' && typeof ProductionRecordsAPI !== 'undefined'
+        && ProductionRecordsAPI.reopenForNode) {
+      const pr = await ProductionRecordsAPI.reopenForNode(order.id, node.id);
+      if (!pr.ok) console.warn('[undo] 生产记录回退失败:', pr.error);
+    }
 
     // Cascade: deactivate downstream if it was auto-activated
     let warning = null;

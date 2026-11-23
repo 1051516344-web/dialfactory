@@ -18,18 +18,17 @@ const ProductionRecordsAPI = (() => {
 
   /**
    * Batch-create production records for all processes in an order.
-   * First process gets status '生产中' with created_at=now; rest = '待生产'.
+   * 全部初始为「待生产」——建单那一刻没人开工；记录由 advance() 在节点完成时收口。
    */
   async function createForOrder(orderId, nodes) {
     const now = new Date().toISOString();
     // B5: link each record to its node_id (rework/append can reuse a process name).
-    // Sort by seq so the initially-active node (first) becomes '生产中'.
     const ordered = [...nodes].sort((a, b) => (a.seq || 0) - (b.seq || 0));
-    const rows = ordered.map((node, i) => ({
+    const rows = ordered.map((node) => ({
       order_id: orderId,
       node_id: node.id || node.node_id || null,
       process_name: node.process_name,
-      status: i === 0 ? '生产中' : '待生产',
+      status: '待生产',
       created_at: now
     }));
     return DB.call(
@@ -117,8 +116,78 @@ const ProductionRecordsAPI = (() => {
     );
   }
 
+  /**
+   * 节点完成时自动收口生产记录（幂等）。由 NodeActions.advance() 调用。
+   * - 有「待生产 / 生产中」记录 → 置「已完成」（DB 触发器补 completed_at + duration_minutes）
+   * - 无记录（追加/返工新增的节点）→ 补建一条「已完成」
+   *   注意：duration 触发器只挂在 BEFORE UPDATE 上，INSERT 不触发，
+   *   所以这里必须显式写 completed_at / duration_minutes。
+   * - 已是「已完成」→ 原样返回，不重复写
+   */
+  async function closeForNode(orderId, node, extra) {
+    const opts = extra || {};
+    const q = await DB.call(
+      DB.get().from('production_records')
+        .select('id, status')
+        .eq('order_id', orderId)
+        .eq('node_id', node.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+    );
+    const existing = q.ok && q.data && q.data[0];
+
+    const fields = { status: '已完成' };
+    if (opts.goodQty != null) fields.good_qty = opts.goodQty;
+    if (opts.badQty != null) fields.bad_qty = opts.badQty;
+
+    if (existing) {
+      if (existing.status === '已完成') return { ok: true, data: existing, skipped: true };
+      return update(existing.id, fields);
+    }
+
+    const now = new Date().toISOString();
+    // 时间起点用节点最后一次状态变更时间（≈ 变 active 的时刻），而不是「现在」
+    const startedAt = node.updated_at || node.created_at || now;
+    const row = {
+      order_id: orderId,
+      node_id: node.id,
+      process_name: node.process_name,
+      status: '已完成',
+      created_at: startedAt,
+      completed_at: now,
+      duration_minutes: Math.max(0, Math.round((new Date(now) - new Date(startedAt)) / 60000))
+    };
+    if (opts.goodQty != null) row.good_qty = opts.goodQty;
+    if (opts.badQty != null) row.bad_qty = opts.badQty;
+    return create(row);
+  }
+
+  /**
+   * 撤销「完成」时把记录退回「生产中」，否则下次完成会被幂等逻辑跳过。
+   * 由 NodeActions.undo() 调用。
+   */
+  async function reopenForNode(orderId, nodeId) {
+    const q = await DB.call(
+      DB.get().from('production_records')
+        .select('id, status')
+        .eq('order_id', orderId)
+        .eq('node_id', nodeId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+    );
+    const rec = q.ok && q.data && q.data[0];
+    if (!rec || rec.status !== '已完成') return { ok: true, skipped: true };
+    return DB.call(
+      DB.get().from('production_records')
+        .update({ status: '生产中', completed_at: null, duration_minutes: null })
+        .eq('id', rec.id)
+        .select()
+        .single()
+    );
+  }
+
   return {
-    create, createForOrder, update, listByOrderId,
+    create, createForOrder, update, closeForNode, reopenForNode, listByOrderId,
     listActive, getRecentActivity, getTodayCompleted
   };
 })();

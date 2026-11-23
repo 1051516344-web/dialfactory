@@ -295,6 +295,28 @@ WHERE p.code BETWEEN 'P16' AND 'P19' ORDER BY p.code;
 POST=1 次不重试；401=1 次；跨域=1 次；离线=1 次快速失败）；真实页面确认 `FetchRetry.stats().installed === true`
 且 `window.fetch` 已被包装；正常查询（200 空结果）不触发重试。
 
+### 8.7 生产记录闭环（2026-11-23）
+
+**问题**：节点状态机与生产记录是两条平行线。`advance()` 只写 `order_nodes`，从不碰
+`production_records`；只有「开始生产 → 生产完成」这条支路做了人工对齐。实测 27 个节点里
+**11 个错位**（done 但记录缺失/待生产/生产中）。
+
+- `production-records.js` 新增 `closeForNode()`（幂等）与 `reopenForNode()`：
+  - 有「待生产/生产中」记录 → 置「已完成」（DB 触发器补 completed_at + duration）
+  - 无记录（追加/返工节点）→ 补建一条「已完成」；**duration 触发器只挂 BEFORE UPDATE，
+    INSERT 不触发**，所以显式写 completed_at / duration_minutes
+  - 已是「已完成」→ 跳过
+- `node-actions.js`：`advance()` 置 done 后调用 `closeForNode`（失败不阻塞推进，只带警告）；
+  `undo()` 从 done 退回 active 时调用 `reopenForNode`（否则下次完成会被幂等跳过）。
+- `createForOrder()`：**全部初始「待生产」**（原先第一条是「生产中」，建单即「在产」，语义错误）。
+- `order-detail.js`：删除「开始生产 / 生产完成」两个按钮，**完成成为唯一入口**；
+  良品数/次品数（选填）搬进「完成」确认框；P35 仍额外要求产出数量。
+- 历史修复 SQL：`supabase/repairs/2026-11-23_fix_production_records.sql`
+  （含备份表、诊断、补建、收口、清假时长、校验、回滚；**需在 SQL Editor 手动执行**）。
+
+**验证**：6 个文件 `node --check` 全过；5 个桩用例（待生产→已完成 / 无记录→补建 / 幂等跳过 /
+撤销回退 / 建单全待生产）全过；登录后实机确认订单详情只剩「完成 · 暂停」，完成弹窗含良品/次品字段。
+
 ---
 
 ## 9. 开发规范与踩坑记录（血泪教训）

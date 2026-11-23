@@ -184,16 +184,11 @@ const OrderDetailPage = (() => {
       `).join('');
     }
 
-    // Phase 3-E: Look up production record for this node
-    // B5: prefer node_id match (rework/append may reuse a process name)
-    const prodRecord = currentProductionRecords.find(r => r.node_id === node.id)
-      || currentProductionRecords.find(r => r.process_name === node.process_name);
-    const prodIsActive = prodRecord && prodRecord.status === '生产中';
-
     // Action buttons
     let actionsHtml = '';
-    // Hide node "完成" when production record is active — avoid duplicate completion buttons
-    if (actions.includes('advance') && !prodIsActive) {
+    // 唯一的完成入口：生产记录的结算由 NodeActions.advance() 内部自动完成，
+    // 不再提供「开始生产 / 生产完成」两个按钮（两条并行路径正是数据错位的根源）。
+    if (actions.includes('advance')) {
       const label = Validation.requiresQtyOut(node) ? '完成(需填产出)' : '完成';
       actionsHtml += `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onAdvance('${node.id}')">${label}</button>`;
     }
@@ -217,13 +212,6 @@ const OrderDetailPage = (() => {
     }
     if (actions.includes('record_exception')) {
       actionsHtml += `<button class="btn btn-danger btn-sm" onclick="OrderDetailPage.onRecordException('${node.id}')">记录异常</button>`;
-    }
-
-    // Phase 4: Production record buttons
-    if (node.status === 'active' && (!prodRecord || prodRecord.status === '待生产')) {
-      actionsHtml += `<button class="btn btn-primary btn-sm" onclick="OrderDetailPage.onStartProduction('${node.id}')">开始生产</button>`;
-    } else if (prodIsActive) {
-      actionsHtml += `<button class="btn btn-success btn-sm" onclick="OrderDetailPage.onCompleteProduction('${node.id}','${prodRecord.id}')">生产完成</button>`;
     }
 
     // V1.1: Undo (within time window) — B14 moved from string-replace override
@@ -298,26 +286,38 @@ const OrderDetailPage = (() => {
     const node = getNode(nodeId);
     if (!node) return;
 
-    // Check 是否需填产出（仅总QC P35）
-    if (Validation.requiresQtyOut(node)) {
-      ConfirmDialog.show({
-        title: '填写产出数量',
-        content: `
-          <div class="form-group">
-            <label class="form-label">产出数量 *</label>
-            <input type="number" name="qtyOut" class="form-input" placeholder="合格品数量" min="1" autofocus>
-          </div>
-        `,
-        confirmLabel: '确认完成',
-        onConfirm: async (data) => {
-          const result = await NodeActions.advance(currentOrder, node, { qtyOut: data.qtyOut });
-          handleActionResult(result);
-        }
-      });
-    } else {
-      const result = await NodeActions.advance(currentOrder, node);
-      handleActionResult(result);
-    }
+    const needsQty = Validation.requiresQtyOut(node);
+    ConfirmDialog.show({
+      title: needsQty ? '完成工序（需填产出）' : '完成工序',
+      content: `
+        <p style="margin-bottom:var(--space-md);">确认完成 <strong>${escapeHTML(node.process_name)}</strong> ？</p>
+        ${needsQty ? `
+        <div class="form-group">
+          <label class="form-label">产出数量 *</label>
+          <input type="number" name="qtyOut" class="form-input" placeholder="合格品数量" min="1" autofocus>
+        </div>` : ''}
+        <div class="form-group">
+          <label class="form-label">良品数 (选填)</label>
+          <input type="number" name="good_qty" class="form-input" placeholder="件数" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">次品数 (选填)</label>
+          <input type="number" name="bad_qty" class="form-input" placeholder="件数" min="0">
+        </div>
+        <p style="color:var(--text-muted);font-size:var(--font-size-sm);line-height:1.6;">
+          完成后该工序的生产记录会自动结算为「已完成」，无需再单独点「开始生产」。
+        </p>
+      `,
+      confirmLabel: '确认完成',
+      onConfirm: async (data) => {
+        const result = await NodeActions.advance(currentOrder, node, {
+          qtyOut: needsQty ? data.qtyOut : undefined,
+          goodQty: parseQty(data.good_qty),
+          badQty: parseQty(data.bad_qty)
+        });
+        handleActionResult(result);
+      }
+    });
   }
 
   async function onPause(nodeId) {
@@ -850,75 +850,6 @@ const OrderDetailPage = (() => {
     return Number.isFinite(n) ? n : null;
   }
 
-  async function onStartProduction(nodeId) {
-    const node = getNode(nodeId);
-    if (!node) return;
-    // B11: update an existing 待生产 record instead of creating a duplicate
-    // B5: match by node_id first (rework/append may reuse a process name)
-    const existing = currentProductionRecords.find(r => r.node_id === node.id && r.status === '待生产')
-      || currentProductionRecords.find(r => r.process_name === node.process_name && r.status === '待生产');
-    const result = existing
-      ? await ProductionRecordsAPI.update(existing.id, { status: '生产中', created_at: new Date().toISOString() })
-      : await ProductionRecordsAPI.create({
-          order_id: currentOrder.id,
-          node_id: node.id,
-          process_name: node.process_name,
-          status: '生产中'
-        });
-    if (result.ok) {
-      Toast.success('已开始生产: ' + node.process_name);
-      refreshProductionRecords();
-    } else {
-      Toast.error(result.error || '操作失败');
-    }
-  }
-
-  async function onCompleteProduction(nodeId, recordId) {
-    const node = getNode(nodeId);
-    if (!node) return;
-
-    ConfirmDialog.show({
-      title: '完成生产',
-      content: `
-        <p>确认完成 <strong>${escapeHTML(node.process_name)}</strong> ？</p>
-        <div class="form-group">
-          <label class="form-label">良品数 (选填)</label>
-          <input type="number" name="good_qty" class="form-input" placeholder="件数" min="0">
-        </div>
-        <div class="form-group">
-          <label class="form-label">次品数 (选填)</label>
-          <input type="number" name="bad_qty" class="form-input" placeholder="件数" min="0">
-        </div>
-      `,
-      confirmLabel: '确认完成',
-      onConfirm: async (data) => {
-        // B16: robust parse — distinguish empty input ("") from a valid "0"
-        const goodQty = parseQty(data.good_qty);
-        const badQty = parseQty(data.bad_qty);
-
-        // 1. Complete the production record (sets completed_at + duration_minutes)
-        const fields = { status: '已完成' };
-        if (goodQty != null) fields.good_qty = goodQty;
-        if (badQty != null) fields.bad_qty = badQty;
-        const prResult = await ProductionRecordsAPI.update(recordId, fields);
-        if (!prResult.ok) {
-          Toast.error(prResult.error || '操作失败');
-          return;
-        }
-
-        // 2. Refresh production timeline to show updated duration
-        await refreshProductionRecords();
-
-        // 3. Advance the node to move the flow forward (B12: 仅总QC P35 需要 qty_out)
-        const advanceOpts = Validation.requiresQtyOut(node) ? { qtyOut: goodQty } : {};
-        const advanceResult = await NodeActions.advance(currentOrder, node, advanceOpts);
-        handleActionResult(advanceResult);
-
-        Toast.success('生产完成: ' + node.process_name);
-      }
-    });
-  }
-
   async function refreshProductionRecords() {
     const pr = await ProductionRecordsAPI.listByOrderId(currentOrder.id);
     currentProductionRecords = pr.ok ? pr.data : [];
@@ -1149,5 +1080,5 @@ const OrderDetailPage = (() => {
     });
   }
 
-  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, onStartProduction, onCompleteProduction, showCreateBatchDialog, onSaveAsTemplate, onMarkInspected };
+  return { render, onAdvance, onPause, onResume, onActivate, onRemove, onRework, onAppend, onRecordException, onUndo, onCancelOrder, onSegmentRework, showCreateBatchDialog, onSaveAsTemplate, onMarkInspected };
 })();
