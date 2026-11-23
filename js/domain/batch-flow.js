@@ -99,5 +99,84 @@ const BatchFlow = (() => {
     return !!flow && flow.total > 0 && flow.doneCount >= flow.total;
   }
 
-  return { deriveRoute, isComplete };
+  /** 事件回放：某个批次在某个节点上的状态 */
+  function batchStatusAt(batchId, nodeId, events) {
+    const evs = (events || []).filter(function (e) {
+      return e.node_id === nodeId && (!e.batch_id || e.batch_id === batchId);
+    }).sort(function (a, b) {
+      return new Date(a.occurred_at) - new Date(b.occurred_at);
+    });
+
+    let status = 'waiting';
+    evs.forEach(function (e) {
+      if (e.event === 'activate' || e.event === 'resume' || e.event === 'undo') status = 'active';
+      else if (e.event === 'pause') status = 'paused';
+      else if (e.event === 'done') status = 'done';
+    });
+    return status;
+  }
+
+  /**
+   * 订单级聚合：每个节点在所有覆盖批次上的综合状态。
+   * 覆盖批次 = 出生工序早于或等于该节点的批次（出生点之后的批次不拖后腿）。
+   * 规则：全部 done → done；任一 active → active；任一 paused → paused；否则 waiting。
+   */
+  function deriveOrderAggregate(events, route, batches) {
+    const nodes = (route || []).slice().sort(function (a, b) { return (a.seq || 0) - (b.seq || 0); });
+    const activeBatches = (batches || []).filter(function (b) { return b.status !== 'cancelled'; });
+
+    return nodes.map(function (n) {
+      const covering = activeBatches.filter(function (b) {
+        if (!b.start_node_id) return true;
+        const sn = nodes.find(function (x) { return x.id === b.start_node_id; });
+        return !sn || n.seq >= sn.seq;
+      });
+
+      const states = covering.map(function (b) { return batchStatusAt(b.id, n.id, events); });
+
+      let status;
+      if (states.length === 0) {
+        status = 'waiting';
+      } else if (states.every(function (s) { return s === 'done'; })) {
+        status = 'done';
+      } else if (states.some(function (s) { return s === 'active'; })) {
+        status = 'active';
+      } else if (states.some(function (s) { return s === 'paused'; })) {
+        status = 'paused';
+      } else {
+        status = 'waiting';
+      }
+
+      return {
+        nodeId: n.id,
+        seq: n.seq,
+        processName: n.process_name,
+        status: status,
+        batchStates: covering.map(function (b, i) { return { batchId: b.id, status: states[i] }; })
+      };
+    });
+  }
+
+  /** 该批次的下一道工序（纯函数；无下一道返回 null = 批次完成） */
+  function nextNodeForBatch(route, currentNodeId, startNodeId) {
+    const nodes = (route || []).slice().sort(function (a, b) { return (a.seq || 0) - (b.seq || 0); });
+    const cur = nodes.find(function (n) { return n.id === currentNodeId; });
+    const startSeq = startNodeId
+      ? (nodes.find(function (n) { return n.id === startNodeId; }) || {}).seq
+      : null;
+    const after = nodes.filter(function (n) {
+      if (cur && n.seq <= cur.seq) return false;
+      if (startSeq != null && n.seq < startSeq) return false;
+      return true;
+    });
+    return after[0] || null;
+  }
+
+  /** 每个批次的当前节点（第一个非 done 节点；全 done 返回 null） */
+  function deriveBatchCurrent(events, route, batch) {
+    const flow = deriveRoute(events, route, batch && batch.start_node_id);
+    return flow.current;
+  }
+
+  return { deriveRoute, isComplete, batchStatusAt, deriveOrderAggregate, nextNodeForBatch, deriveBatchCurrent };
 })();
